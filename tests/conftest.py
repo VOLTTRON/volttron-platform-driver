@@ -32,6 +32,8 @@ if "src" not in sys.path:
 
 from volttrontesting.fixtures.volttron_platform_fixtures import volttron_instance
 
+from .fixtures import *
+
 
 @pytest.fixture()
 def publish_agent(volttron_instance):

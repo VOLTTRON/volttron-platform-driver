@@ -22,232 +22,154 @@
 # ===----------------------------------------------------------------------===
 # }}}
 
-import bisect
-import fnmatch
-import logging
-import resource
-import sys
-from collections import defaultdict
-from datetime import datetime, timedelta
-
 import gevent
+import importlib
+import logging
+import sys
+
+from collections import defaultdict
+from pydantic import BaseModel, ValidationError
+from typing import Sequence, Set
+from weakref import WeakValueDictionary
+
 from volttron.client.known_identities import PLATFORM_DRIVER
-from volttron.client.vip.agent import Agent
+from volttron.client.messaging.health import STATUS_BAD
+from volttron.client.messaging.utils import normtopic
+from volttron.client.vip.agent import Agent, Core
 from volttron.client.vip.agent.subsystems.rpc import RPC
-from volttron.driver.base.driver import DriverAgent
-from volttron.driver.base.driver_locks import (
-    configure_publish_lock,
-    configure_socket_lock,
-)
-from volttron.driver.base.interfaces import DriverInterfaceError
-from volttron.utils import (
-    format_timestamp,
-    get_aware_utc_now,
-    load_config,
-    parse_timestamp_string,
-    setup_logging,
-    vip_main,
-)
-from volttron.utils.jsonapi import dumps, loads
-from volttron.utils.math_utils import mean, stdev
+from volttron.driver.base.driver import BaseInterface, DriverAgent
+from volttron.driver.base.driver_locks import configure_publish_lock, setup_socket_lock
+from volttron.driver.base.utils import setup_publishes
+from volttron.utils import format_timestamp, get_aware_utc_now, load_config, setup_logging, vip_main
+from volttron.utils.jsonrpc import RemoteError
+
+
+from .constants import *
+from .equipment import EquipmentTree, PointNode
+from .overrides import OverrideManager
+from .reservations import ReservationManager
+from .scalability_testing import ScalabilityTester
 
 setup_logging()
 _log = logging.getLogger(__name__)
 __version__ = '4.0'
 
+latest_config_version = 2
 
-class OverrideError(DriverInterfaceError):
-    """Error raised when the user tries to set/revert point when global override is set."""
-    pass
+class PlatformDriverConfig(BaseModel):
+    config_version: int = latest_config_version
+    allow_duplicate_controllers: bool = False
+    allow_no_lock_write: bool = False  # TODO: Alias with "require_reservation_to_write"?
+    allow_reschedule: bool = True
+    controller_heartbeat_interval: float = 60.0
+    # default_polling_interval: float = 60 # TODO: Is this used?
+    group_offset_interval: float = 0.0
+    max_concurrent_publishes: int = 10000
+    max_open_sockets: int | None = None
+    minimum_polling_interval: float = 0.02
+    poll_scheduler_configs: dict = {}
+    poll_scheduler_class_name: str = 'StaticCyclicPollScheduler'
+    poll_scheduler_module_name: str = 'platform_driver.poll_scheduler'
+    reservation_preempt_grace_time: float = 60.0
+    reservation_publish_interval: float = 60.0
+    scalability_test: bool = False
+    scalability_test_iterations: int = 3
+
+class PlatformDriverConfigV2(PlatformDriverConfig):
+    config_version: int = 2
+    publish_depth_first_single: bool = False
+    publish_depth_first_all: bool = False
+    publish_depth_first_any: bool = True
+    publish_breadth_first_single: bool = False
+    publish_breadth_first_all: bool = False
+    publish_breadth_first_any: bool = False
 
 
-def initialize_agent(config_path, **kwargs):
-
-    config = load_config(config_path)
-
-    def get_config(name, default=None):
-        try:
-            return kwargs.pop(name)
-        except KeyError:
-            return config.get(name, default)
-
-    # Increase open files resource limit to max or 8192 if unlimited
-    system_socket_limit = None
-
-    try:
-        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-    except OSError:
-        _log.exception('error getting open file limits')
-    else:
-        if soft != hard and soft != resource.RLIM_INFINITY:
-            try:
-                system_socket_limit = 8192 if hard == resource.RLIM_INFINITY else hard
-                resource.setrlimit(resource.RLIMIT_NOFILE, (system_socket_limit, hard))
-            except OSError:
-                _log.exception('error setting open file limits')
-            else:
-                _log.debug('open file resource limit increased from %d to %d', soft,
-                           system_socket_limit)
-        if soft == hard:
-            system_socket_limit = soft
-
-    max_open_sockets = get_config('max_open_sockets', None)
-
-    # TODO: update the default after scalability testing.
-    max_concurrent_publishes = get_config('max_concurrent_publishes', 10000)
-
-    driver_config_list = get_config('driver_config_list')
-
-    scalability_test = get_config('scalability_test', False)
-    scalability_test_iterations = get_config('scalability_test_iterations', 3)
-
-    driver_scrape_interval = get_config('driver_scrape_interval', 0.02)
-
-    if config.get("driver_config_list") is not None:
-        _log.warning("Platform driver configured with old setting. This is no longer supported.")
-        _log.warning(
-            'Use the script "scripts/update_platform_driver_config.py" to convert the configuration.'
-        )
-
-    publish_depth_first_all = bool(get_config("publish_depth_first_all", True))
-    publish_breadth_first_all = bool(get_config("publish_breadth_first_all", False))
-    publish_depth_first = bool(get_config("publish_depth_first", False))
-    publish_breadth_first = bool(get_config("publish_breadth_first", False))
-
-    group_offset_interval = get_config("group_offset_interval", 0.0)
-
-    return PlatformDriverAgent(driver_config_list,
-                               scalability_test,
-                               scalability_test_iterations,
-                               driver_scrape_interval,
-                               group_offset_interval,
-                               max_open_sockets,
-                               max_concurrent_publishes,
-                               system_socket_limit,
-                               publish_depth_first_all,
-                               publish_breadth_first_all,
-                               publish_depth_first,
-                               publish_breadth_first,
-                               heartbeat_autostart=True,
-                               **kwargs)
+class PlatformDriverConfigV1(PlatformDriverConfig):
+    config_version: int = 1
+    driver_scrape_interval: float = 0.02
+    publish_depth_first: bool = False
+    publish_depth_first_all: bool = True
+    publish_breadth_first: bool = False
+    publish_breadth_first_all: bool = False
 
 
 class PlatformDriverAgent(Agent):
 
-    def __init__(self,
-                 driver_config_list,
-                 scalability_test=False,
-                 scalability_test_iterations=3,
-                 driver_scrape_interval=0.02,
-                 group_offset_interval=0.0,
-                 max_open_sockets=None,
-                 max_concurrent_publishes=10000,
-                 system_socket_limit=None,
-                 publish_depth_first_all=True,
-                 publish_breadth_first_all=False,
-                 publish_depth_first=False,
-                 publish_breadth_first=False,
-                 **kwargs):
+    def __init__(self, **kwargs):
+        config_path = kwargs.pop('config_path', None)
         super(PlatformDriverAgent, self).__init__(**kwargs)
-        self.instances = {}
-        self.scalability_test = scalability_test
-        self.scalability_test_iterations = scalability_test_iterations
+        self.config: PlatformDriverConfig = self._load_versioned_config(load_config(config_path) if config_path else {})
+        if self.config.config_version == 1:
+            self.config = self._convert_version_1_configs(self.config)
+
+        self.breadth_first_publishes, self.depth_first_publishes = setup_publishes(self.config)
+        self.controller_heartbeat_interval = self.config.controller_heartbeat_interval
+
+        # Initialize internal data structures:
+        self.controllers = WeakValueDictionary()
+        self.equipment_tree = EquipmentTree()
+        self.interface_classes = {}
+
+        # Set up locations for helper objects:
+        self.heartbeat_greenlet = None
+        self.override_manager = None  # TODO: Should this initialize object here and call a load method on config?
+        self.poll_scheduler = None  # TODO: Should this use a default poll scheduler?
+        self.reservation_manager = None  # TODO: Should this use a default reservation manager?
+        self.scalability_test = None
+
+        self.vip.config.set_default("config", self.config.dict())
+        self.vip.config.subscribe(self.configure_main, actions=['NEW', 'UPDATE', 'DELETE'], pattern='config')
+
+        self.equipment_config_lock = True  # Set equipment_config_lock until after on_configure is complete.
+        _log.debug('########### SETTING LOCK IN __INIT__()')
+        _log.debug('########### SUBSCRIBING TO NEW AND UPDATE ON "devices/*"')
+        self.vip.config.subscribe(self.update_equipment, actions=['NEW', 'UPDATE'], pattern='devices/*')
+        self.vip.config.subscribe(self.remove_equipment, actions='DELETE', pattern='devices/*')
+
+    #########################
+    # Configuration & Startup
+    #########################
+
+    def _convert_version_1_configs(self, config):
+        config.minimum_polling_interval = config.driver_scrape_interval
+        return config
+
+    def _load_versioned_config(self, config):
+        if not config: # There is no configuration yet, just loading defaults. No need to warn about versions.
+            return PlatformDriverConfigV1()
+        config_version = config.get('config_version', 1)
         try:
-            self.driver_scrape_interval = float(driver_scrape_interval)
-        except ValueError:
-            _log.warning("Invalid driver_scrape_interval, setting to default value.")
-            self.driver_scrape_interval = 0.02
+            if config_version < latest_config_version:
+                _log.warning(f'Deprecation Warning: Platform Driver Agent has been configured with an agent'
+                             f' configuration which is either unversioned or less than {latest_config_version}.'
+                             f' Please see readthedocs for information regarding update of configuration style'
+                             f' to a version {latest_config_version}. Support for'
+                             f' configuration version style {config_version} may be removed in a future release.')
+                return PlatformDriverConfigV1(**config)
+            else:
+                return PlatformDriverConfigV2(**config)
+        except ValidationError as e:
+            _log.warning(f'Validation of platform driver configuration file failed. Using default values.'
+                         f' Errors: {str(e)}')
+            if self.core.connected:  # TODO: Is this a valid way to make sure we are ready to call subsystems?
+                self.vip.health.set_status(STATUS_BAD, "Error processing configuration: {e}")
+            return PlatformDriverConfigV2()
 
-        try:
-            self.group_offset_interval = float(group_offset_interval)
-        except ValueError:
-            _log.warning("Invalid group_offset_interval, setting to default value.")
-            self.group_offset_interval = 0.0
-
-        self.system_socket_limit = system_socket_limit
-        self.freed_time_slots = defaultdict(list)
-        self.group_counts = defaultdict(int)
-        self._name_map = {}
-
-        self.publish_depth_first_all = bool(publish_depth_first_all)
-        self.publish_breadth_first_all = bool(publish_breadth_first_all)
-        self.publish_depth_first = bool(publish_depth_first)
-        self.publish_breadth_first = bool(publish_breadth_first)
-        self._override_devices = set()
-        self._override_patterns = None
-        self._override_interval_events = {}
-
-        if scalability_test:
-            self.waiting_to_finish = set()
-            self.test_iterations = 0
-            self.test_results = []
-            self.current_test_start = None
-
-        self.default_config = {
-            "scalability_test": scalability_test,
-            "scalability_test_iterations": scalability_test_iterations,
-            "max_open_sockets": max_open_sockets,
-            "max_concurrent_publishes": max_concurrent_publishes,
-            "driver_scrape_interval": self.driver_scrape_interval,
-            "group_offset_interval": self.group_offset_interval,
-            "publish_depth_first_all": self.publish_depth_first_all,
-            "publish_breadth_first_all": self.publish_breadth_first_all,
-            "publish_depth_first": self.publish_depth_first,
-            "publish_breadth_first": self.publish_breadth_first
-        }
-
-        self.vip.config.set_default("config", self.default_config)
-        self.vip.config.subscribe(self.configure_main, actions=["NEW", "UPDATE"], pattern="config")
-        self.vip.config.subscribe(self.update_driver,
-                                  actions=["NEW", "UPDATE"],
-                                  pattern="devices/*")
-        self.vip.config.subscribe(self.remove_driver, actions="DELETE", pattern="devices/*")
-
-    def configure_main(self, config_name, action, contents):
-        config = self.default_config.copy()
-        config.update(contents)
-
+    def configure_main(self, _, action, contents):
+        _log.debug("############# STARTING CONFIGURE_MAIN")
+        old_config = self.config.copy()
+        new_config = self._load_versioned_config(contents)
+        if new_config.config_version == 1:
+            new_config = self._convert_version_1_configs(new_config)
+        _log.debug(self.config)
         if action == "NEW":
+            self.config = new_config
             try:
-                self.max_open_sockets = config["max_open_sockets"]
-                if self.max_open_sockets is not None:
-                    max_open_sockets = int(self.max_open_sockets)
-                    configure_socket_lock(max_open_sockets)
-                    _log.info("maximum concurrently open sockets limited to " +
-                              str(max_open_sockets))
-                elif self.system_socket_limit is not None:
-                    max_open_sockets = int(self.system_socket_limit * 0.8)
-                    _log.info("maximum concurrently open sockets limited to " +
-                              str(max_open_sockets) + " (derived from system limits)")
-                    configure_socket_lock(max_open_sockets)
-                else:
-                    configure_socket_lock()
-                    _log.warning(
-                        "No limit set on the maximum number of concurrently open sockets. "
-                        "Consider setting max_open_sockets if you plan to work with 800+ modbus devices."
-                    )
-
-                self.max_concurrent_publishes = config['max_concurrent_publishes']
-                max_concurrent_publishes = int(self.max_concurrent_publishes)
-                if max_concurrent_publishes < 1:
-                    _log.warning(
-                        "No limit set on the maximum number of concurrent driver publishes. "
-                        "Consider setting max_concurrent_publishes if you plan to work with many devices."
-                    )
-                else:
-                    _log.info("maximum concurrent driver publishes limited to " +
-                              str(max_concurrent_publishes))
-                configure_publish_lock(max_concurrent_publishes)
-
-                self.scalability_test = bool(config["scalability_test"])
-                self.scalability_test_iterations = int(config["scalability_test_iterations"])
-
-                if self.scalability_test:
-                    self.waiting_to_finish = set()
-                    self.test_iterations = 0
-                    self.test_results = []
-                    self.current_test_start = None
-
+                setup_socket_lock(self.config.max_open_sockets)
+                configure_publish_lock(int(self.config.max_concurrent_publishes))
+                self.scalability_test = (ScalabilityTester(self.config.scalability_test_iterations)
+                                         if self.config.scalability_test else None)
             except ValueError as e:
                 _log.error(
                     "ERROR PROCESSING STARTUP CRITICAL CONFIGURATION SETTINGS: {}".format(e))
@@ -255,314 +177,395 @@ class PlatformDriverAgent(Agent):
                 sys.exit(1)
 
         else:
-            if self.max_open_sockets != config["max_open_sockets"]:
-                _log.info(
-                    "The platform driver must be restarted for changes to the max_open_sockets setting to take "
-                    "effect")
+            # Some settings cannot be changed while running. Warn and replace these with the old ones until restart.
+            _log.info('Updated configuration received for Platform Driver.')
+            if new_config.max_open_sockets != old_config['max_open_sockets']:
+                new_config.max_open_sockets = old_config['max_open_sockets']
+                _log.info('Restart Platform Driver for changes to the max_open_sockets setting to take effect')
 
-            if self.max_concurrent_publishes != config["max_concurrent_publishes"]:
-                _log.info(
-                    "The platform driver must be restarted for changes to the max_concurrent_publishes setting to "
-                    "take effect")
+            if new_config.max_concurrent_publishes != old_config['max_concurrent_publishes']:
+                new_config.max_concurrent_publishes = old_config['max_concurrent_publishes']
+                _log.info('Restart Platform Driver for changes to the max_concurrent_publishes setting to take effect')
 
-            if self.scalability_test != bool(config["scalability_test"]):
-                if not self.scalability_test:
-                    _log.info(
-                        "The platform driver must be restarted with scalability_test set to true in order to run a test."
-                    )
-                if self.scalability_test:
-                    _log.info(
-                        "A scalability test may not be interrupted. Restarting the driver is required to stop "
-                        "the test.")
+            if new_config.scalability_test != old_config['scalability_test']:
+                new_config.scalability_test = old_config['scalability_test']
+                if not old_config.scalability_test:
+                    _log.info('Restart Platform Driver with scalability_test set to true in order to run a test.')
+                if old_config.scalability_test:
+                    _log.info("A scalability test may not be interrupted. Restart the driver to stop the test.")
             try:
-                if self.scalability_test_iterations != int(config["scalability_test_iterations"]) and \
-                        self.scalability_test:
-                    _log.info(
-                        "A scalability test must be restarted for the scalability_test_iterations setting to "
-                        "take effect.")
+                if new_config.scalability_test_iterations != old_config['scalability_test_iterations'] and \
+                        old_config.scalability_test:
+                    new_config.scalability_test_iterations = old_config['scalability_test_iterations']
+                    _log.info('The scalability_test_iterations setting cannot be changed without restarting the agent.')
             except ValueError:
                 pass
+            if old_config.scalability_test:
+                _log.info("Running scalability test. Settings may not be changed without restart.")
+                return
+            self.config = new_config
 
-        # update override patterns
-        if self._override_patterns is None:
+        if self.override_manager is None:
+            self.override_manager = OverrideManager(self)
+
+        self.breadth_first_publishes, self.depth_first_publishes = setup_publishes(self.config)
+        # Update the publication settings on running devices.
+        for driver in self.controllers.values():
+            driver.update_publish_types(self.breadth_first_publishes, self.depth_first_publishes)
+
+        # Set up Poll Scheduler:
+        poll_scheduler_module = importlib.import_module(self.config.poll_scheduler_module_name)
+        poll_scheduler_class = getattr(poll_scheduler_module, self.config.poll_scheduler_class_name)
+        self.poll_scheduler = poll_scheduler_class(self, **self.config.poll_scheduler_configs)
+
+        # Set up Reservation Manager:
+        if self.reservation_manager is None:
+            now = get_aware_utc_now()
+            self.reservation_manager = ReservationManager(self, self.config.reservation_preempt_grace_time, now)
+            self.reservation_manager.update(now)
+        else:
+            self.reservation_manager.set_grace_period(self.config.reservation_preempt_grace_time)
+
+        # Set up heartbeat to devices:
+        # TODO: Should this be globally uniform (here), by device (in controller), or globally scheduled (in poll scheduler)?
+        # Only restart the heartbeat if it changes.
+        if (self.config.controller_heartbeat_interval != self.controller_heartbeat_interval
+                or action == "NEW" or self.heartbeat_greenlet is None):
+            if self.heartbeat_greenlet is not None:
+                self.heartbeat_greenlet.kill()
+            self.controller_heartbeat_interval = self.config.controller_heartbeat_interval
+            self.heartbeat_greenlet = self.core.periodic(self.controller_heartbeat_interval, self.heart_beat)
+
+        # Start subscriptions:
+        current_subscriptions = {topic: subscribed for _, topic, subscribed in self.vip.pubsub.list('pubsub').get()}
+        for topic, callback in [
+            (GET_TOPIC, self.handle_get),
+            (SET_TOPIC, self.handle_set),
+            (RESERVATION_REQUEST_TOPIC, self.handle_reservation_request),
+            (REVERT_POINT_TOPIC, self.handle_revert_point),
+            (REVERT_DEVICE_TOPIC, self.handle_revert_device)
+        ]:
+            if not current_subscriptions.get(topic):
+                self.vip.pubsub.subscribe('pubsub', topic, callback)
+        # TODO: Is the check above a helpful improvement, or should we just use this to subscribe?:
+        # #if not self.subscriptions_setup and self.reservation_manager is not None:
+        #     # Do this after the Reservation Manager is setup.
+        #     self.vip.pubsub.subscribe('pubsub', PUBSUB_GET_TOPIC, self.handle_get)
+        #     self.vip.pubsub.subscribe('pubsub', PUBSUB_SET_TOPIC, self.handle_set)
+        #     self.vip.pubsub.subscribe('pubsub', PUBSUB_RESERVATION_TOPIC, self.handle_reservation_request)
+        #     self.vip.pubsub.subscribe('pubsub', PUBSUB_REVERT_POINT_TOPIC, self.handle_revert_point)
+        #     self.vip.pubsub.subscribe('pubsub', PUBSUB_REVERT_DEVICE_TOPIC, self.handle_revert_device)
+        #     self.subscriptions_setup = True
+
+        # Load Equipment Tree:
+        for c in self.vip.config.list():
+            if 'devices/' in c[:8]:
+                equipment_config = self.vip.config.get(c)
+                _log.debug('GOT EQUIPMENT CONFIG: ')
+                _log.debug(equipment_config)
+#                registry_location = equipment_config['registry_config']#[len('config://'):]
+ #               _log.debug(f'############ ATTEMPTING TO RETRIEVE REGISTRY CONFIG FROM: {registry_location}')
+  #              equipment_config['registry_config'] = self.vip.config.get(registry_location)
+                self._configure_new_equipment(c, 'NEW', equipment_config, schedule_now=False)
+        # Schedule Polling
+        self.poll_scheduler.schedule()
+        _log.debug("############ ENDING CONFIGURE_MAIN")
+
+    @Core.receiver('onstart')
+    def on_start(self, _):
+        # Remove the equipment_config_lock after the on configure event has completed. Initial configuration of all
+        #  equipment should be complete. We can now allow update events to run.
+        _log.error(f"########## RUNNING ON_START (REMOVING LOCK).")
+        self.equipment_config_lock = False
+
+    def _configure_new_equipment(self, config_name, _, contents, schedule_now=True):
+        if self.equipment_tree.get_node(config_name):
+            _log.warning(f'Received a NEW configuration for equipment which already exists: {config_name}')
+            return
+        if contents.get('controller_config', contents).get('driver_type'):
+            # Received new device node.
             try:
-                values = self.vip.config.get("override_patterns")
-                values = loads(values)
+                driver = self._get_or_create_controller(config_name, contents)
+            except ValueError as e:
+                _log.warning(f'Skipping configuration of equipment: {config_name} after encountering error --- {e}')
+                return
+            device_node = self.equipment_tree.add_device(device_topic=config_name, config=contents, driver_agent=driver)
+            driver.add_equipment(device_node)
+        else: # Received new or updated segment node.
+            self.equipment_tree.add_segment(config_name, contents)
+        if schedule_now:
+            self.poll_scheduler.schedule()
 
-                if isinstance(values, dict):
-                    self._override_patterns = set()
-                    for pattern, end_time in values.items():
-                        # check the end_time
-                        now = get_aware_utc_now()
-                        # If end time is indefinite, set override with indefinite duration
-                        if end_time == "0.0":
-                            self._set_override_on(pattern, 0.0, from_config_store=True)
-                        else:
-                            end_time = parse_timestamp_string(end_time)
-                            # If end time > current time, set override with new duration
-                            if end_time > now:
-                                delta = end_time - now
-                                self._set_override_on(pattern,
-                                                      delta.total_seconds(),
-                                                      from_config_store=True)
+    def _get_or_create_controller(self, equipment_name, config):
+        # TODO: This has gotten reworked a few times, and may not entirely make sense anymore
+        #  for where everything ends up and what we are manipulating to manage versions.
+        if self.config.config_version >= 2:
+            interface_name = config['controller_config'].get('driver_type')
+            controller_group = config['controller_config'].get('group', '0')
+            config['controller_config']['group'] = controller_group
+            controller_config = config['controller_config']
+        else:
+            interface_name = config.get('driver_type')
+            controller_group = config.get('group', '0')
+            controller_config = config['driver_config']
+            controller_config['group'] = controller_group
+            controller_config['driver_type'] = interface_name
+        if not interface_name:
+            raise ValueError(f'Unable to configure driver for equipment: "{equipment_name}"'
+                             f' as it does not have a specified interface.')
+        else:
+            interface = self.interface_classes.get(interface_name)
+            if not interface:
+                try:
+                    module = controller_config.get('module')
+                    interface = BaseInterface.get_interface_subclass(interface_name, module)
+                except (ModuleNotFoundError, ValueError) as e:
+                    raise ValueError(f'Unable to configure driver for equipment: "{equipment_name}"'
+                                     f' with interface: {interface_name}.'
+                                     f' This interface type is currently unknown or not installed.'
+                                     f' Received exception: {e}')
+                self.interface_classes[interface_name] = interface
+
+            allow_duplicate_controllers = True if (controller_config.get('allow_duplicate_controllers')
+                                                   or self.config.allow_duplicate_controllers) else False
+            if not allow_duplicate_controllers:
+                unique_controller_id = interface.unique_controller_id(equipment_name, controller_config)
+            else:
+                unique_controller_id = BaseInterface.unique_controller_id(equipment_name, controller_config)
+
+            driver_agent = self.controllers.get(unique_controller_id)
+            if not driver_agent:
+                _log.info("Starting driver: {}".format(unique_controller_id))
+                _log.debug('GIVING NEW DRIVER CONFIG: ')
+                _log.debug(config)
+                driver_agent = DriverAgent(self, config, unique_controller_id)
+                _log.debug(f"SPAWNING GREENLET for: {unique_controller_id}")
+                gevent.spawn(driver_agent.core.run)
+                # TODO: Were the right number spawned? Need more debug code to ascertain this is working correctly.
+                self.controllers[unique_controller_id] = driver_agent
+            return driver_agent
+
+    def update_equipment(self, config_name, action, contents):
+        """Callback for updating equipment configuration."""
+        if self.equipment_config_lock:
+            _log.debug(f'############# {action} ACTION RAN! THE LOCK IS SET! ##############')
+            return
+        # TODO: Implement UPDATE callback for /devices.
+        _log.debug(f'############ {action} ACTION RAN! UH OH, NO LOCK!!! ##############')
+        self.poll_scheduler.check_for_reschedule()
+
+    def remove_equipment(self, config_name, _, __):
+        """Callback to remove equipment configuration."""
+        self.equipment_tree.remove_segment(config_name)
+        # TODO: Implement override handling.
+        # self._update_override_state(config_name, 'remove')
+        self.poll_scheduler.check_for_reschedule()
+
+
+    ###############
+    # Query Backend
+    ###############
+
+    # TODO: WIP Check this method. Does it work? Well? Is it necessary?
+    def find_working_tree(self, topic: str | Sequence[str] | Set[str] = None, regex: str = None, tag: str = None):
+        # Resolve tags if the tag query parameter is set:
+        tag_list = None
+        if tag:
+            try:
+                tag_list = self.vip.rpc.call('platform.tagging', 'get_topics_by_tags', tag)
+            except gevent.Timeout as e:
+                e.exception = f'Tagging Service timed out: {e.exception}'
+                raise
+
+        if isinstance(topic, list):
+            exact_matches = topic
+            topic = None
+        else:
+            exact_matches = []
+        exact_matches.extend(tag_list)
+        # Prune device tree and get nodes matching topic:
+        return self.equipment_tree.prune(topic, regex, exact_matches)
+
+    # TODO: WIP Check this method. Does it work? Well?  Is it necessary?
+    def find_points_in_equipment_tree(self, topic: str | Sequence[str] | Set[str] = None, regex: str = None, tag: str = None):
+        working_tree = self.find_working_tree(topic, regex, tag)
+        root_name = self.equipment_tree.root
+        # TODO: This won't work if topic is a list.
+        return working_tree.get_matches(f'{root_name}/{topic}' if topic else f'{root_name}')
+
+    # TODO: WIP Check this method. Does it work? Well? Is it necessary?
+    def find_nodes_in_equipment_tree(self, topic: str | Sequence[str] | Set[str] = None, regex: str = None, tag: str = None):
+        working_tree = self.find_working_tree(topic, regex, tag)
+        root_name = self.equipment_tree.root
+        # TODO: Find any nodes in the tree matching criteria, not just points. Return these.
+        return []
+
+    def build_query_plan(self, topic: str | Sequence[str] | Set[str] = None, regex: str = None, tag: str = None
+                         ) -> dict[DriverAgent, set[PointNode]]:
+        """ Find points to be queried and organize by controller."""
+        working_tree = self.find_working_tree(topic, regex, tag)
+        # Build controller: set of points dictionary.
+        query_plan = defaultdict(set)
+        for p in working_tree.points():
+            query_plan[p.get_controller(working_tree.identifier)].add(p)
+        return query_plan
+
+    ###############
+    # RPC Interface
+    ###############
+
+    @RPC.export
+    def get(self, topic: str | Sequence[str] | Set[str] = None, tag: str = None, regex: str = None) -> (dict, dict):
+        _log.debug("############ IN GET")
+        results = {}
+        errors = {}
+        # Find set of points to query and organize by controller:
+        _log.debug("########### BEFORE QUERY PLAN")
+        query_plan = self.build_query_plan(topic, regex, tag)
+        _log.debug("############ AFTER QUERY PLAN")
+        # Make query for selected points on each controller:
+        for (controller, point_set) in query_plan.items():
+            print(f'For controller: {controller}, point_set is: {point_set}')
+            query_return_values, query_return_errors = controller.get_multiple_points([p.topic for p in point_set])
+            for topic, val in query_return_values.items():
+                self.equipment_tree.get_node(topic).last_value(val)
+            results.update(query_return_values)
+            errors.update(query_return_errors)
+        return results, errors
+
+    @RPC.export
+    def set(self, value: any, topic: str | Sequence[str] | Set[str] = None, tag: str = None, regex: str = None,
+            confirm_values: bool = False, map_points=False) -> dict:
+        # TODO: Implement set() following get() pattern.
+        # TODO: If map points is True, interpret value dictionary as point: value mapping.
+        pass
+
+    @RPC.export
+    def revert(self, topic: str | Sequence[str] | Set[str] = None, tag: str = None, regex: str = None,
+              confirm_values: bool = False) -> dict:
+        # TODO: Implement revert() following get() pattern.
+        pass
+
+    @RPC.export
+    def last(self, topic: str | Sequence[str] | Set[str] = None, tag: str = None, regex: str = None, value: bool = True,
+             updated: bool = True) -> dict:
+        # TODO: WIP last() should get points following get() pattern.
+        points = self.find_points_in_equipment_tree(topic, regex, tag)
+        if value:
+            if updated:
+                return_dict = {p.topic: {'value': p.last_value, 'updated': p.last_updated} for p in points}
+            else:
+                return_dict = {p.topic: p.last_value for p in points}
+        else:
+            return_dict = {p.topic: p.last_updated for p in points}
+        return return_dict
+
+    #-----------
+    # UI Support
+    #-----------
+    @RPC.export
+    def start(self, topic: str | Sequence[str] | Set[str] = None, tag: str = None, regex: str = None) -> None:
+        points = self.find_nodes_in_equipment_tree(topic, regex, tag)
+        for p in points:
+            if p.active:
+                return
+            else:
+                p.active = True
+                if self.config.allow_reschedule:
+                    self.poll_scheduler.schedule()
                 else:
-                    self._override_patterns = set()
-            except KeyError:
-                self._override_patterns = set()
-            except ValueError:
-                _log.error("Override patterns is not set correctly in config store")
-                self._override_patterns = set()
-        try:
-            driver_scrape_interval = float(config["driver_scrape_interval"])
-        except ValueError as e:
-            _log.error("ERROR PROCESSING CONFIGURATION: {}".format(e))
-            _log.error("Platform driver scrape interval settings unchanged")
-            # TODO: set a health status for the agent
-
-        try:
-            group_offset_interval = float(config["group_offset_interval"])
-        except ValueError as e:
-            _log.error("ERROR PROCESSING CONFIGURATION: {}".format(e))
-            _log.error("Platform driver group interval settings unchanged")
-            # TODO: set a health status for the agent
-
-        if self.scalability_test and action == "UPDATE":
-            _log.info("Running scalability test. Settings may not be changed without restart.")
-            return
-
-        if (self.driver_scrape_interval != driver_scrape_interval
-                or self.group_offset_interval != group_offset_interval):
-            self.driver_scrape_interval = driver_scrape_interval
-            self.group_offset_interval = group_offset_interval
-
-            _log.info("Setting time delta between driver device scrapes to  " +
-                      str(driver_scrape_interval))
-
-            # Reset all scrape schedules
-            self.freed_time_slots.clear()
-            self.group_counts.clear()
-            for driver in self.instances.values():
-                time_slot = self.group_counts[driver.group]
-                driver.update_scrape_schedule(time_slot, self.driver_scrape_interval, driver.group,
-                                              self.group_offset_interval)
-                self.group_counts[driver.group] += 1
-
-        self.publish_depth_first_all = bool(config["publish_depth_first_all"])
-        self.publish_breadth_first_all = bool(config["publish_breadth_first_all"])
-        self.publish_depth_first = bool(config["publish_depth_first"])
-        self.publish_breadth_first = bool(config["publish_breadth_first"])
-
-        # Update the publish settings on running devices.
-        for driver in self.instances.values():
-            driver.update_publish_types(self.publish_depth_first_all,
-                                        self.publish_breadth_first_all, self.publish_depth_first,
-                                        self.publish_breadth_first)
-
-    def derive_device_topic(self, config_name):
-        _, topic = config_name.split('/', 1)
-        return topic
-
-    def stop_driver(self, device_topic):
-        real_name = self._name_map.pop(device_topic.lower(), device_topic)
-
-        driver = self.instances.pop(real_name, None)
-
-        if driver is None:
-            return
-
-        _log.info("Stopping driver: {}".format(real_name))
-
-        try:
-            driver.core.stop(timeout=5.0)
-        except Exception as e:
-            _log.error("Failure during {} driver shutdown: {}".format(real_name, e))
-
-        bisect.insort(self.freed_time_slots[driver.group], driver.time_slot)
-        self.group_counts[driver.group] -= 1
-
-    def update_driver(self, config_name, action, contents):
-        _log.info("In update_driver")
-        topic = self.derive_device_topic(config_name)
-        self.stop_driver(topic)
-
-        group = int(contents.get("group", 0))
-
-        slot = self.group_counts[group]
-
-        if self.freed_time_slots[group]:
-            slot = self.freed_time_slots[group].pop(0)
-
-        _log.info("Starting driver: {}".format(topic))
-        driver = DriverAgent(self, contents, slot, self.driver_scrape_interval, topic, group,
-                             self.group_offset_interval, self.publish_depth_first_all,
-                             self.publish_breadth_first_all, self.publish_depth_first,
-                             self.publish_breadth_first)
-        _log.debug("SPAWNING GREENLET....")
-        gevent.spawn(driver.core.run)
-        self.instances[topic] = driver
-        self.group_counts[group] += 1
-        self._name_map[topic.lower()] = topic
-        self._update_override_state(topic, 'add')
-
-    def remove_driver(self, config_name, action, contents):
-        topic = self.derive_device_topic(config_name)
-        self.stop_driver(topic)
-        self._update_override_state(topic, 'remove')
-
-    # def device_startup_callback(self, topic, driver):
-    #     _log.debug("Driver hooked up for "+topic)
-    #     topic = topic.strip('/')
-    #     self.instances[topic] = driver
-
-    def scrape_starting(self, topic):
-        if not self.scalability_test:
-            return
-
-        if not self.waiting_to_finish:
-            # Start a new measurement
-            self.current_test_start = datetime.now()
-            self.waiting_to_finish = set(self.instances.keys())
-
-        if topic not in self.waiting_to_finish:
-            _log.warning(
-                f"{topic} started twice before test finished, increase the length of scrape interval and rerun test"
-            )
-
-    def scrape_ending(self, topic):
-        if not self.scalability_test:
-            return
-
-        try:
-            self.waiting_to_finish.remove(topic)
-        except KeyError:
-            _log.warning(
-                f"{topic} published twice before test finished, increase the length of scrape interval and rerun test"
-            )
-
-        if not self.waiting_to_finish:
-            end = datetime.now()
-            delta = end - self.current_test_start
-            delta = delta.total_seconds()
-            self.test_results.append(delta)
-
-            self.test_iterations += 1
-
-            _log.info("publish {} took {} seconds".format(self.test_iterations, delta))
-
-            if self.test_iterations >= self.scalability_test_iterations:
-                # Test is now over. Button it up and shutdown.
-                mean_t = mean(self.test_results)
-                stdev_t = stdev(self.test_results)
-                _log.info("Mean total publish time: " + str(mean_t))
-                _log.info("Std dev publish time: " + str(stdev_t))
-                sys.exit(0)
+                    self.poll_scheduler.add_to_schedule(p)
 
     @RPC.export
-    def get_point(self, path, point_name, **kwargs):
-        """RPC method
+    def stop(self, topic: str | Sequence[str] | Set[str] = None, tag: str = None, regex: str = None) -> None:
+        points = self.find_nodes_in_equipment_tree(topic, regex, tag)
+        for p in points:
+            if not p.active:
+                return
+            else:
+                p.active = False
+                if self.config.allow_reschedule:
+                    self.poll_scheduler.schedule()
+                else:
+                    self.poll_scheduler.remove_from_schedule(p)
 
-        Return value of specified device set point
-        :param path: device path
-        :type path: str
-        :param point_name: set point
-        :type point_name: str
-        :param kwargs: additional arguments for the device
-        :type kwargs: arguments pointer
+    @RPC.export
+    def enable(self, topic: str | Sequence[str] | Set[str] = None, tag: str = None, regex: str = None) -> None:
+        nodes = self.find_nodes_in_equipment_tree(topic, regex, tag)
+        for node in nodes:
+            node.config['active'] = True
+            if not node.is_point():
+                # TODO: Make sure this doesn't trigger UPDATE.
+                self.vip.config.set(node.topic, node.config)
+            else:
+                # TODO: Find device parent, get registry from there? Or better to have path to registry already.
+                pass
+
+    @RPC.export
+    def disable(self, topic: str | Sequence[str] | Set[str] = None, tag: str = None, regex: str = None) -> None:
+        nodes = self.find_nodes_in_equipment_tree(topic, regex, tag)
+        for node in nodes:
+            node.config['active'] = False
+            if not node.is_point():
+                self.vip.config.set(node.topic, node.config)
+            else:
+                # TODO: Find device parent, get registry from there? Or better to have path to registry already.
+                pass
+
+    @RPC.export
+    def status(self, topic: str | Sequence[str] | Set[str] = None, tag: str = None, regex: str = None) -> dict:
+        # TODO: Implement status()
+        pass
+
+    @RPC.export
+    def add_node(self, parent_topic: str, node_topic: str, config: dict) -> dict|None:
+        # TODO: Implement add_node()
+        pass
+
+    @RPC.export
+    def remove_node(self, node_topic: str) -> dict|None:
+        # TODO: Implement remove_node()
+        pass
+
+    @RPC.export
+    def add_interface(self, driver_name: str, local_path: str = None) -> dict|None:
+        # TODO: Implement add_interface()
+        pass
+
+    @RPC.export
+    def remove_interface(self, driver_name: str) -> dict|None:
+        # TODO: Implement remove_interface()
+        pass
+
+    #-------------
+    # Reservations
+    #-------------
+    @RPC.export
+    def new_reservation(self, task_id: str, priority: str, requests: list) -> dict|None:
         """
-        return self.instances[path].get_point(point_name, **kwargs)
+        Reserve one or more blocks on time on one or more device.
 
-    @RPC.export
-    def set_point(self, path, point_name, value, **kwargs):
-        """RPC method
-
-        Set value on specified device set point. If global override is condition is set, raise OverrideError exception.
-        :param path: device path
-        :type path: str
-        :param point_name: set point
-        :type point_name: str
-        :param value: value to set
-        :type value: int/float/bool
-        :param kwargs: additional arguments for the device
-        :type kwargs: arguments pointer
+        :param task_id: An identifier for this reservation.
+        :param priority: Priority of the task. Must be either "HIGH", "LOW",
+        or "LOW_PREEMPT"
+        :param requests: A list of time slot requests in the format
+        described in `Device Schedule`_.
         """
-        if path in self._override_devices:
-            raise OverrideError(
-                "Cannot set point on device {} since global override is set".format(path))
-        else:
-            return self.instances[path].set_point(point_name, value, **kwargs)
+        rpc_peer = self.vip.rpc.context.vip_message.peer
+        return self.reservation_manager.new_reservation(rpc_peer, task_id, priority, requests, publish_result=False)
 
     @RPC.export
-    def scrape_all(self, path):
-        return self.instances[path].scrape_all()
-
-    @RPC.export
-    def get_multiple_points(self, path, point_names, **kwargs):
-        return self.instances[path].get_multiple_points(point_names, **kwargs)
-
-    @RPC.export
-    def set_multiple_points(self, path, point_names_values, **kwargs):
-        """RPC method
-
-        Set values on multiple set points at once. If global override is condition is set,raise OverrideError exception.
-        :param path: device path
-        :type path: str
-        :param point_names_values: list of points and corresponding values
-        :type point_names_values: list of tuples
-        :param kwargs: additional arguments for the device
-        :type kwargs: arguments pointer
+    def cancel_reservation(self, task_id: str) -> dict|None:
         """
-        if path in self._override_devices:
-            raise OverrideError(
-                "Cannot set point on device {} since global override is set".format(path))
-        else:
-            return self.instances[path].set_multiple_points(point_names_values, **kwargs)
-
-    @RPC.export
-    def heart_beat(self):
-        """RPC method
-
-        Sends heartbeat to all devices
+        Requests the cancellation of the specified task id.
+        :param task_id: Task name.
         """
-        _log.debug("sending heartbeat")
-        for device in self.instances.values():
-            device.heart_beat()
+        rpc_peer = self.vip.rpc.context.vip_message.peer
+        return self.reservation_manager.cancel_reservation(rpc_peer, task_id, publish_result=False)
 
-    @RPC.export
-    def revert_point(self, path, point_name, **kwargs):
-        """RPC method
-
-        Revert the set point to default state/value. If global override is condition is set, raise OverrideError
-        exception.
-        :param path: device path
-        :type path: str
-        :param point_name: set point to revert
-        :type point_name: str
-        :param kwargs: additional arguments for the device
-        :type kwargs: arguments pointer
-        """
-        if path in self._override_devices:
-            raise OverrideError(
-                "Cannot revert point on device {} since global override is set".format(path))
-        else:
-            self.instances[path].revert_point(point_name, **kwargs)
-
-    @RPC.export
-    def revert_device(self, path, **kwargs):
-        """RPC method
-
-        Revert all the set point values of the device to default state/values. If global override is condition is set,
-        raise OverrideError exception.
-        :param path: device path
-        :type path: str
-        :param kwargs: additional arguments for the device
-        :type kwargs: arguments pointer
-        """
-        if path in self._override_devices:
-            raise OverrideError(
-                "Cannot revert device {} since global override is set".format(path))
-        else:
-            self.instances[path].revert_all(**kwargs)
-
+    #----------
+    # Overrides
+    #----------
     @RPC.export
     def set_override_on(self, pattern, duration=0.0, failsafe_revert=True, staggered_revert=False):
         """RPC method
@@ -583,58 +586,7 @@ class PlatformDriverAgent(Agent):
         :param staggered_revert: If this flag is set, reverting of devices will be staggered.
         :type staggered_revert: boolean
         """
-        self._set_override_on(pattern, duration, failsafe_revert, staggered_revert)
-
-    def _set_override_on(self,
-                         pattern,
-                         duration=0.0,
-                         failsafe_revert=True,
-                         staggered_revert=False,
-                         from_config_store=False):
-        """Turn on override condition on all devices matching the pattern. It schedules an event to keep track of
-        the duration over which override has to be applied. New override patterns and corresponding end times are
-        stored in config store.
-        :param pattern: Override pattern to be applied. For example,
-        :type pattern: str
-        :param duration: Time duration for the override in seconds. If duration <= 0.0, it implies as indefinite
-        duration.
-        :type duration: float
-        :param failsafe_revert: Flag to indicate if revert is required
-        :type failsafe_revert: boolean
-        :param staggered_revert: Flag to indicate if staggering of reverts is needed.
-        :type staggered_revert: boolean
-        :param from_config_store: Flag to indicate if this function is called from config store callback
-        :type from_config_store: boolean
-        """
-        stagger_interval = 0.05    # sec
-        # Add to override patterns set
-        self._override_patterns.add(pattern)
-        i = 0
-        for name in self.instances.keys():
-            i += 1
-            if fnmatch.fnmatch(name, pattern):
-                # If revert to default state is needed
-                if failsafe_revert:
-                    if staggered_revert:
-                        self.core.spawn_later(i * stagger_interval,
-                                              self.instances[name].revert_all())
-                    else:
-                        self.core.spawn(self.instances[name].revert_all())
-                # Set override
-                self._override_devices.add(name)
-        # Set timer for interval of override condition
-        config_update = self._update_override_interval(duration, pattern)
-        if config_update and not from_config_store:
-            # Update config store
-            patterns = dict()
-            for pat in self._override_patterns:
-                if self._override_interval_events[pat] is None:
-                    patterns[pat] = str(0.0)
-                else:
-                    evt, end_time = self._override_interval_events[pat]
-                    patterns[pat] = format_timestamp(end_time)
-
-            self.vip.config.set("override_patterns", dumps(patterns))
+        self.override_manager.set_on(pattern, duration, failsafe_revert, staggered_revert)
 
     @RPC.export
     def set_override_off(self, pattern):
@@ -645,7 +597,7 @@ class PlatformDriverAgent(Agent):
         :param pattern: Pattern on which override condition has to be removed.
         :type pattern: str
         """
-        return self._set_override_off(pattern)
+        return self.override_manager.set_off(pattern)
 
     # Get a list of all the devices with override condition.
     @RPC.export
@@ -654,7 +606,7 @@ class PlatformDriverAgent(Agent):
 
         Get a list of all the devices with override condition.
         """
-        return list(self._override_devices)
+        return list(self.override_manager.devices)
 
     @RPC.export
     def clear_overrides(self):
@@ -662,14 +614,7 @@ class PlatformDriverAgent(Agent):
 
         Clear all overrides.
         """
-        # Cancel all pending override timer events
-        for pattern, evt in self._override_interval_events.items():
-            if evt is not None:
-                evt[0].cancel()
-        self._override_interval_events.clear()
-        self._override_devices.clear()
-        self._override_patterns.clear()
-        self.vip.config.set("override_patterns", {})
+        self.override_manager.clear()
 
     @RPC.export
     def get_override_patterns(self):
@@ -677,137 +622,663 @@ class PlatformDriverAgent(Agent):
 
         Get a list of all the override patterns.
         """
-        return list(self._override_patterns)
+        return list(self.override_manager.patterns)
 
-    def _set_override_off(self, pattern):
-        """Turn off override condition on all devices matching the pattern. It removes the pattern from the override
-        patterns set, clears the list of overridden devices  and reevaluates the state of devices. It then cancels the
-        pending override event and removes pattern from the config store.
-        :param pattern: Override pattern to be removed.
-        :type pattern: str
+    #-------------------
+    # Legacy RPC Methods
+    #-------------------
+    @RPC.export
+    def get_point(self, path=None, point_name=None, **kwargs) -> any:
         """
-        # If pattern exactly matches
-        if pattern in self._override_patterns:
-            self._override_patterns.discard(pattern)
-            # Cancel any pending override events
-            self._cancel_override_events(pattern)
-            self._override_devices.clear()
-            patterns = dict()
-            # Build override devices list again
-            for pat in self._override_patterns:
-                for device in self.instances:
-                    if fnmatch.fnmatch(device, pat):
-                        self._override_devices.add(device)
+        RPC method
 
-                if self._override_interval_events[pat] is None:
-                    patterns[pat] = str(0.0)
-                else:
-                    evt, end_time = self._override_interval_events[pat]
-                    patterns[pat] = format_timestamp(end_time)
+        Gets up-to-date value of a specific point on a device.
+        Does not require the device be scheduled.
 
-            self.vip.config.set("override_patterns", dumps(patterns))
-        else:
-            _log.error("Override Pattern did not match!")
-            raise OverrideError(
-                "Pattern {} does not exist in list of override patterns".format(pattern))
+        :param path: The topic of the point to grab in the
+                      format <device topic>/<point name>
 
-    def _update_override_interval(self, interval, pattern):
-        """Schedules a new override event for the specified interval and pattern. If the pattern already exists and new
-        end time is greater than old one, the event is cancelled and new event is scheduled.
+                      Only the <device topic> if point is specified.
+        :param point_name: Point on the device. Assumes topic includes point name if omitted.
+        :param kwargs: Any driver specific parameters
+        :type path: str
+        :returns: point value
+        :rtype: any base python type"""
 
-        :param interval override duration. If interval is <= 0.0, implies indefinite duration
-        :type pattern: float
-        :param pattern: Override pattern.
-        :type pattern: str
-        :return Flag to indicate if update is done or not.
-        """
-        if interval <= 0.0:    # indicative of indefinite duration
-            if pattern in self._override_interval_events:
-                # If override duration is indefinite, do nothing
-                if self._override_interval_events[pattern] is None:
-                    return False
-                else:
-                    # Cancel the old event
-                    evt = self._override_interval_events.pop(pattern)
-                    evt[0].cancel()
-            self._override_interval_events[pattern] = None
-            return True
-        else:
-            override_start = get_aware_utc_now()
-            override_end = override_start + timedelta(seconds=interval)
-            if pattern in self._override_interval_events:
-                evt = self._override_interval_events[pattern]
-                # If event is indefinite or greater than new end time, do nothing
-                if evt is None or override_end < evt[1]:
-                    return False
-                else:
-                    evt = self._override_interval_events.pop(pattern)
-                    evt[0].cancel()
-            # Schedule new override event
-            event = self.core.schedule(override_end, self._cancel_override, pattern)
-            self._override_interval_events[pattern] = (event, override_end)
-            return True
+        # Support for old-actuator-style keyword arguments.
+        path = path if path else kwargs.get('topic', None)
+        point_name = point_name if point_name else kwargs.get('point', None)
+        if path is None:
+            # DEPRECATED: Only allows topic to be None to permit use of old-actuator-style keyword argument "topic".
+            raise TypeError('Argument "path" is required.')
 
-    def _cancel_override_events(self, pattern):
-        """
-        Cancel override event matching the pattern
-        :param pattern: override pattern
-        :type pattern: str
-        """
-        if pattern in self._override_interval_events:
-            # Cancel the override cancellation timer event
-            evt = self._override_interval_events.pop(pattern, None)
-            if evt is not None:
-                evt[0].cancel()
-
-    def _cancel_override(self, pattern):
-        """
-        Cancel the override
-        :param pattern: override pattern
-        :type: pattern: str
-        """
-        self._set_override_off(pattern)
-
-    def _update_override_state(self, device, state):
-        """
-        If a new device is added, it is checked to see if the device is part of the list of overridden patterns. If so,
-        it is added to the list of overridden devices. Similarly, if a device is being removed, it is also removed
-        from list of overridden devices (if exists).
-        :param device: device to be removed
-        :type device: str
-        :param state: 'add' or 'remove'
-        :type state: str
-        """
-        device = device.lower()
-
-        if state == 'add':
-            # If device falls under the existing overridden patterns, then add it to list of overridden devices.
-            for pattern in self._override_patterns:
-                if fnmatch.fnmatch(device, pattern):
-                    self._override_devices.add(device)
-                    return
-        else:
-            # If device is in list of overridden devices, remove it.
-            if device in self._override_devices:
-                self._override_devices.remove(device)
+        path, point_name = self._split_topic(path, point_name)
+        node = self.equipment_tree.get_node(self._equipment_id(path, point_name))
+        if not node:
+            raise ValueError(f'No equipment found for topic: {"/".join([path, point_name])}')
+        controller = node.get_controller(self.equipment_tree)
+        if not controller:
+            raise ValueError(f'No controller found for topic: {"/".join([path, point_name])}')
+        return controller.get_point(point_name, **kwargs)
 
     @RPC.export
-    def forward_bacnet_cov_value(self, source_address, point_name, point_values):
+    def set_point(self, path: str, point_name: str | None, value: any, *args, **kwargs) -> any:
+        """RPC method
+
+        Sets the value of a specific point on a device.
+        Requires the device be scheduled by the calling agent.
+
+        :param path: The topic of the point to set in the
+                      format <device topic>/<point name>
+                      Only the <device topic> if point is specified.
+        :param value: Value to set point to.
+        :param point_name: Point on the device.
+        :param kwargs: Any driver specific parameters
+        :type path: str
+        :type value: any basic python type
+        :type point_name: str
+        :returns: value point was actually set to. Usually invalid values
+                cause an error but some drivers (MODBUS) will return a
+                different
+                value with what the value was actually set to.
+        :rtype: any base python type
+
+        .. warning:: Calling will raise a ReservationLockError if another agent has already scheduled
+        this device for the present time."""
+
+        sender = self.vip.rpc.context.vip_message.peer
+
+        # Support for old-actuator-style arguments.
+        topic = kwargs.get('topic')
+        if topic:
+            path = topic
+        elif path == sender or len(args) > 0:
+            # Function was likely called with actuator-style positional arguments. Reassign variables to match.
+            _log.debug('Deprecated actuator-style positional arguments detected in set_point().'
+                       ' Please consider converting code to use set() method.')
+            path, point_name = (point_name, args[0]) if len(args) >= 1 else point_name, None
+        point_name = point_name if point_name else kwargs.get('point', None)
+
+        path, point_name = self._split_topic(path, point_name)
+        node = self.equipment_tree.get_node(self._equipment_id(path, point_name))
+        if not node:
+            raise ValueError(f'No equipment found for topic: {"/".join([path, point_name])}')
+        self.equipment_tree.raise_on_locks(node, sender)
+        controller = node.get_controller(self.equipment_tree.identifier)
+        if not controller:
+            raise ValueError(f'No controller found for topic: {"/".join([path, point_name])}')
+        result = controller.set_point(point_name, value, **kwargs)
+        headers = self._get_headers(sender)
+        self._push_result_topic_pair(WRITE_ATTEMPT_PREFIX, topic, headers, value)
+        self._push_result_topic_pair(VALUE_RESPONSE_PREFIX, topic, headers, result)
+        return result
+
+    @RPC.export
+    def scrape_all(self, topic: str):
+        """RPC method
+
+        Get all points from a device.
+
+        :param topic: Device topic
+        :returns: Dictionary of points to values
         """
-        Called by the BACnet Proxy to pass the COV value to the driver agent
-        for publishing
-        :param source_address: path of the device used for publish topic
-        :param point_name: name of the point in the COV notification
-        :param point_values: dictionary of updated values sent by the device
+        path = self._equipment_id(topic, None)
+        return self.get(topic=path)
+
+    @RPC.export
+    def get_multiple_points(self, path: str | Sequence[str | Sequence] = None, point_names = None, **kwargs):
+        """RPC method
+
+        Get multiple points on multiple devices. Makes a single
+        RPC call to the platform driver per device.
+
+        :param path: A topic (with or without point names), a list of full topics (with point names),
+         or a list of [device, point] pairs.
+        :param point_names: A Sequence of point names associated with the given path.
+        :param kwargs: Any driver specific parameters
+
+        :returns: Dictionary of points to values and dictionary of points to errors
+
+        .. warning:: This method does not require that all points be returned
+                     successfully. Check that the error dictionary is empty.
         """
-        for driver in self.instances.values():
-            if driver.device_path == source_address:
-                driver.publish_cov_value(point_name, point_values)
+        # Support for actuator-style keyword arguments.
+        topics = path if path else kwargs.get('topics', None)
+        if topics is None:
+            # path is allowed to be None to permit use of old-actuator-style keyword argument "topics".
+            raise TypeError('Argument "path" is required.')
+
+        errors = {}
+        devices = set()
+        if isinstance(topics, str):
+            if not point_names:
+                devices.add(topics)
+            else:
+                for point in point_names:
+                    devices.add(self._equipment_id(topics, point))
+        elif isinstance(topics, Sequence):
+            for topic in topics:
+                if isinstance(topic, str):
+                    devices.add(self._equipment_id(topic))
+                elif isinstance(topic, Sequence) and len(topic) == 2:
+                    devices.add(self._equipment_id(*topic))
+                else:
+                    e = ValueError("Invalid topic: {}".format(topic))
+                    errors[repr(topic)] = repr(e)
+
+        results, query_errors = self.get(devices)
+        errors.update(query_errors)
+        return results, errors
+
+    @RPC.export
+    def set_multiple_points(self, path, point_names_values, **kwargs):
+        """RPC method
+
+        Set values on multiple set points at once. If global override is condition is set,raise OverrideError exception.
+        :param path: device path
+        :type path: str
+        :param point_names_values: list of points and corresponding values
+        :type point_names_values: list of tuples
+        :param kwargs: additional arguments for the device
+        :type kwargs: arguments pointer
+        """
+        errors = {}
+        topic_value_map = {}
+        sender = self.vip.rpc.context.vip_message.peer
+        # Support for old-actuator-style positional arguments so long as sender matches rpc peer.
+        topics_values = kwargs.get('topics_values')
+        if path == sender or topics_values is not None:  # Method was called with old-actuator-style arguments.
+            topics_values = topics_values if topics_values else point_names_values
+            for topic, value in topics_values:
+                if isinstance(topic, str):
+                    topic_value_map[self._equipment_id(topic, None)] = value
+                elif isinstance(topic, Sequence) and len(topic) == 1:
+                    topic_value_map[self._equipment_id(*topic)] = value
+                else:
+                    e = ValueError("Invalid topic: {}".format(topic))
+                    errors[str(topic)] = repr(e)
+        else:  # Assume method was called with old-driver-style arguments.
+            for point, value in point_names_values:
+                topic_value_map[self._equipment_id(path, point)] = value
+
+        # TODO: Check that set() really returns two dicts and that latter is errors.
+        _, ret_errors = self.set(topic_value_map, map_points=True, **kwargs)
+        return errors.update(ret_errors)
+
+    @RPC.export
+    def heart_beat(self):
+        """RPC method
+
+        Sends heartbeat to all devices
+        """
+        _log.debug("sending heartbeat")
+        for device in self.controllers.values():
+            device.heart_beat()
+
+    @RPC.export
+    def revert_point(self, path: str, point_name: str, **kwargs):
+        """RPC method
+
+        Revert the set point to default state/value.
+        If global override is condition is set, raise OverrideError exception.
+        If topic has been reserved by another user
+        or if it is not reserved but reservations are required,
+         raise ReservationLockError exception.
+        :
+        param path: device path
+        :type path: str
+        :param point_name: set point to revert
+        :type point_name: str
+        :param kwargs: additional arguments for the device
+        :type kwargs: arguments pointer
+        """
+        sender = self.vip.rpc.context.vip_message.peer
+
+        # Support for old-actuator-style arguments.
+        topic = kwargs.get('topic')
+        if topic:
+            path, point_name = topic, None
+        elif path == sender:
+            # Function was likely called with actuator-style positional arguments. Reassign variables to match.
+            _log.debug('Deprecated actuator-style positional arguments detected in revert_point().'
+                       ' Please consider converting code to use revert() method.')
+            path, point_name = point_name, None
+
+        path, point_name = self._split_topic(path, point_name)
+        node = self.equipment_tree.get_node(self._equipment_id(path, point_name))
+        if not node:
+            raise ValueError(f'No equipment found for topic: {"/".join([path, point_name])}')
+        self.equipment_tree.raise_on_locks(node, sender)
+        controller = node.get_controller(self.equipment_tree.identifier)
+        controller.revert_point(point_name, **kwargs)
+
+        headers = self._get_headers(sender)
+        self._push_result_topic_pair(REVERT_POINT_RESPONSE_PREFIX, topic, headers, None)
+
+    @RPC.export
+    def revert_device(self, path, *args, **kwargs):
+        """RPC method
+
+        Revert all the set point values of the device to default state/values. If global override is condition is set,
+        raise OverrideError exception.
+        :param path: device path
+        :type path: str
+        :param kwargs: additional arguments for the device
+        :type kwargs: arguments pointer
+        """
+        sender = self.vip.rpc.context.vip_message.peer
+
+        # Support for old-actuator-style arguments.
+        topic = kwargs.get('topic')
+        if topic:
+            path = topic
+        elif path == sender and len(args) > 0:
+            # Function was likely called with actuator-style positional arguments. Reassign variables to match.
+            _log.debug('Deprecated actuator-style positional arguments detected in revert_device().'
+                       ' Please consider converting code to use revert() method.')
+            path = args[0]
+
+        node = self.equipment_tree.get_node(self._equipment_id(path, None))
+        if not node:
+            raise ValueError(f'No equipment found for topic: {"/".join([path, point_name])}')
+        self.equipment_tree.raise_on_locks(node, sender)
+        controller = node.get_controller(self.equipment_tree.identifier)
+        controller.revert_all(**kwargs)
+
+        headers = self._get_headers(sender)
+        self._push_result_topic_pair(REVERT_DEVICE_RESPONSE_PREFIX, topic, headers, None)
 
 
-def main(argv=sys.argv):
+    @RPC.export
+    def request_new_schedule(self, requester_id, task_id, priority, requests):
+        """
+        RPC method
+
+        Requests one or more blocks on time on one or more device.
+
+        :param requester_id: Ignored, VIP Identity used internally
+        :param task_id: Task name.
+        :param priority: Priority of the task. Must be either "HIGH", "LOW",
+        or "LOW_PREEMPT"
+        :param requests: A list of time slot requests in the format
+        described in `Device Schedule`_.
+
+        :type requester_id: str
+        :type task_id: str
+        :type priority: str
+        :returns: Request result
+        :rtype: dict
+
+        :Return Values:
+
+            The return values are described in `New Task Response`_.
+        """
+        _log.debug('Call to deprecated RPC method "request_new_schedule. '
+                   'This method provides compatability with the actuator API, but has been superseded '
+                   'by "new_reservation". Please update to the newer method.')
+        rpc_peer = self.vip.rpc.context.vip_message.peer
+        return self.reservation_manager.new_task(rpc_peer, task_id, priority, requests)
+
+    @RPC.export
+    def request_cancel_schedule(self, requester_id, task_id):
+        """RPC method
+
+        Requests the cancellation of the specified task id.
+
+        :param requester_id: Ignored, VIP Identity used internally
+        :param task_id: Task name.
+
+        :type requester_id: str
+        :type task_id: str
+        :returns: Request result
+        :rtype: dict
+
+        :Return Values:
+
+        The return values are described in `Cancel Task Response`_.
+
+        """
+        _log.debug('Call to deprecated RPC method "request_cancel_schedule. '
+                   'This method provides compatability with the actuator API, but has been superseded '
+                   'by "cancel_reservation". Please update to the newer method.')
+        rpc_peer = self.vip.rpc.context.vip_message.peer
+        return self.reservation_manager.cancel_reservation(rpc_peer, task_id, publish_result=False)
+
+    ##################
+    # PubSub Interface
+    ##################
+
+    def handle_get(self, _, sender, __, topic, ___, ____):
+        """
+        Requests up-to-date value of a point.
+
+        To request a value publish a message to the following topic:
+
+        ``devices/actuators/get/<device path>/<actuation point>``
+
+        with the fallowing header:
+
+        .. code-block:: python
+
+            {
+                'requesterID': <Ignored, VIP Identity used internally>
+            }
+
+        The ActuatorAgent will reply on the **value** topic
+        for the actuator:
+
+        ``devices/actuators/value/<full device path>/<actuation point>``
+
+        with the message set to the value the point.
+
+        """
+        point = topic.replace(GET_TOPIC + '/', '', 1)
+        headers = self._get_headers(sender)
+        try:
+            value = self.get_point(point)
+            self._push_result_topic_pair(VALUE_RESPONSE_PREFIX, point, headers, value)
+        except Exception as ex:
+            self._handle_error(ex, point, headers)
+
+
+    def handle_set(self, _, sender, __, topic, ___, message):
+        """
+        Set the value of a point.
+
+        To set a value publish a message to the following topic:
+
+        ``devices/actuators/set/<device path>/<actuation point>``
+
+        with the fallowing header:
+
+        .. code-block:: python
+
+            {
+                'requesterID': <Ignored, VIP Identity used internally>
+            }
+
+        The ActuatorAgent will reply on the **value** topic
+        for the actuator:
+
+        ``devices/actuators/value/<full device path>/<actuation point>``
+
+        with the message set to the value the point.
+
+        Errors will be published on
+
+        ``devices/actuators/error/<full device path>/<actuation point>``
+
+        with the same header as the request.
+
+        """
+        point = topic.replace(SET_TOPIC + '/', '', 1)
+        headers = self._get_headers(sender)
+        if not message:
+            error = {'type': 'ValueError', 'value': 'missing argument'}
+            _log.debug('ValueError: ' + str(error))
+            self._push_result_topic_pair(ERROR_RESPONSE_PREFIX, point, headers, error)
+            return
+
+        try:
+            self.set_point(point, None, message)
+        except Exception as ex:
+            self._handle_error(ex, point, headers)
+
+    def handle_revert_point(self, _, sender, __, topic, ___, ____):
+        """
+        Revert the value of a point.
+
+        To revert a value publish a message to the following topic:
+
+        ``actuators/revert/point/<device path>/<actuation point>``
+
+        with the fallowing header:
+
+        .. code-block:: python
+
+            {
+                'requesterID': <Ignored, VIP Identity used internally>
+            }
+
+        The ActuatorAgent will reply on
+
+        ``devices/actuators/reverted/point/<full device path>/<actuation
+        point>``
+
+        This is to indicate that a point was reverted.
+
+        Errors will be published on
+
+        ``devices/actuators/error/<full device path>/<actuation point>``
+
+        with the same header as the request.
+        """
+        topic = self._equipment_id(topic.replace(REVERT_POINT_TOPIC + '/', '', 1), None)
+        _path, point = self._split_topic(topic, None)
+        headers = self._get_headers(sender)
+
+        try:
+            node = self.equipment_tree.get_node(topic)
+            self.equipment_tree.raise_on_locks(node, sender)
+            controller = node.get_controller(self.equipment_tree.identifier)
+            controller.revert_point(point)
+
+            self._push_result_topic_pair(REVERT_POINT_RESPONSE_PREFIX, topic, headers, None)
+        except Exception as ex:
+            self._handle_error(ex, point, headers)
+
+    def handle_revert_device(self, _, sender, __, topic, ___, ____):
+        """
+        Revert all the writable values on a device.
+
+        To revert a device publish a message to the following topic:
+
+        ``devices/actuators/revert/device/<device path>``
+
+        with the fallowing header:
+
+        .. code-block:: python
+
+            {
+                'requesterID': <Ignored, VIP Identity used internally>
+            }
+
+        The ActuatorAgent will reply on the **value** topic
+        for the actuator:
+
+        ``devices/actuators/reverted/device/<full device path>``
+
+        to indicate that a point was reverted.
+
+        Errors will be published on
+
+        ``devices/actuators/error/<full device path>/<actuation point>``
+
+        with the same header as the request.
+        """
+        topic = self._equipment_id(topic.replace(REVERT_DEVICE_TOPIC + '/', '', 1), None)
+        headers = self._get_headers(sender)
+        try:
+            node = self.equipment_tree.get_node(topic)
+            self.equipment_tree.raise_on_locks(node, sender)
+            controller = node.get_controller(self.equipment_tree.identifier)
+            controller.revert_all()
+
+            self._push_result_topic_pair(REVERT_DEVICE_RESPONSE_PREFIX, topic, headers, None)
+
+        except Exception as ex:
+            self._handle_error(ex, topic, headers)
+
+    def handle_reservation_request(self, _, sender, __, topic, headers, message):
+        """
+        Schedule request pub/sub handler
+
+        An agent can request a task schedule by publishing to the
+        ``devices/actuators/schedule/request`` topic with the following header:
+
+        .. code-block:: python
+
+            {
+                'type': 'NEW_SCHEDULE',
+                'requesterID': <Ignored, VIP Identity used internally>,
+                'taskID': <unique task ID>, #The desired task ID for this
+                task. It must be unique among all scheduled tasks.
+                'priority': <task priority>, #The desired task priority,
+                must be 'HIGH', 'LOW', or 'LOW_PREEMPT'
+            }
+
+        The message must describe the blocks of time using the format
+        described in `Device Schedule`_.
+
+        A task may be canceled by publishing to the
+        ``devices/actuators/schedule/request`` topic with the following header:
+
+        .. code-block:: python
+
+            {
+                'type': 'CANCEL_SCHEDULE',
+                'requesterID': <Ignored, VIP Identity used internally>,
+                'taskID': <unique task ID>, #The task ID for the canceled Task.
+            }
+
+        requesterID
+            The name of the requesting agent. Automatically replaced with VIP id.
+        taskID
+            The desired task ID for this task. It must be unique among all
+            scheduled tasks.
+        priority
+            The desired task priority, must be 'HIGH', 'LOW', or 'LOW_PREEMPT'
+
+        No message is requires to cancel a schedule.
+
+        """
+        request_type = headers.get('type')
+        _log.debug(f'handle_schedule_request: {topic}, {headers}, {message}')
+
+        task_id = headers.get('taskID')
+        priority = headers.get('priority')
+
+        now = get_aware_utc_now()
+        if request_type == RESERVATION_ACTION_NEW:
+            try:
+                requests = message[0] if len(message) == 1 else message
+                headers = self._get_headers(sender, now, task_id, RESERVATION_ACTION_NEW)
+                result = self.reservation_manager.new_task(sender, task_id, requests, priority, now)
+            except Exception as ex:
+                return self._handle_unknown_reservation_error(ex, headers, message)
+            # Dealing with success and other first world problems.
+            if result.success:
+                for preempted_task in result.data:
+                    preempt_headers = self._get_headers(preempted_task[0], task_id=preempted_task[1],
+                                                        action_type=RESERVATION_ACTION_CANCEL)
+                    self.vip.pubsub.publish('pubsub',
+                                            topic=RESERVATION_RESULT_TOPIC,
+                                            headers=preempt_headers,
+                                            message={
+                                                'result': RESERVATION_CANCEL_PREEMPTED,
+                                                'info': '',
+                                                'data': {
+                                                    'agentID': sender,
+                                                    'taskID': task_id
+                                                }
+                                            })
+            results = {'result': (RESERVATION_RESPONSE_SUCCESS if result.success else RESERVATION_RESPONSE_FAILURE),
+                       'data': (result.data if not result.success else {}),
+                       'info': result.info_string}
+            self.vip.pubsub.publish('pubsub', topic=RESERVATION_RESULT_TOPIC, headers=headers, message=results)
+
+
+        elif request_type == RESERVATION_ACTION_CANCEL:
+            try:
+                result = self.reservation_manager.cancel_reservation(sender, task_id)
+                message = {
+                    'result': (RESERVATION_RESPONSE_SUCCESS if result.success else RESERVATION_RESPONSE_FAILURE),
+                    'info': result.info_string,
+                    'data': {}
+                }
+                topic = RESERVATION_RESULT_TOPIC
+                headers = self._get_headers(sender, format_timestamp(now), task_id, RESERVATION_ACTION_CANCEL)
+                self.vip.pubsub.publish('pubsub', topic, headers=headers, message=message)
+
+            except Exception as ex:
+                return self._handle_unknown_reservation_error(ex, headers, message)
+        else:
+            _log.debug('handle-schedule_request, invalid request type')
+            self.vip.pubsub.publish('pubsub', RESERVATION_RESULT_TOPIC, headers, {
+                'result': RESERVATION_RESPONSE_FAILURE,
+                'info': 'INVALID_REQUEST_TYPE',
+                'data': {}
+            })
+
+    ################
+    # Helper Methods
+    ################
+
+    def _split_topic(self, topic: str, point: str = None) -> (str, str):
+        """Convert actuator-style optional point names to (path, point) pair."""
+        topic = topic.strip('/')
+        if not topic.startswith(self.equipment_tree.root):
+            topic = '/'.join([self.equipment_tree.root, topic])
+        path, point_name = (topic, point) if point is not None else topic.rsplit('/', 1)
+        return path, point_name
+
+    def _equipment_id(self, path: str, point: str = None) -> str:
+        """Convert (path, point) pair to full devices/.../point format."""
+        path = path.strip('/')
+        if point is not None:
+            path = '/'.join([path, point])
+        if not path.startswith(self.equipment_tree.root):
+            path = '/'.join([self.equipment_tree.root, path])
+        return path
+
+    @staticmethod
+    def _get_headers(requester, time=None, task_id=None, action_type=None):
+        headers = {}
+        if time is not None:
+            headers['time'] = time
+        else:
+            utcnow = get_aware_utc_now()
+            headers = {'time': format_timestamp(utcnow)}
+        if requester is not None:
+            headers['requesterID'] = requester
+        if task_id is not None:
+            headers['taskID'] = task_id
+        if type is not None:
+            headers['type'] = action_type
+        return headers
+
+    def _push_result_topic_pair(self, prefix, point, headers, value):
+        topic = normtopic('/'.join([prefix, point]))
+        self.vip.pubsub.publish('pubsub', topic, headers, message=value)
+
+    def _handle_error(self, ex, point, headers):
+        if isinstance(ex, RemoteError):
+            try:
+                exc_type = ex.exc_info['exc_type']
+                exc_args = ex.exc_info['exc_args']
+            except KeyError:
+                exc_type = "RemoteError"
+                exc_args = ex.message
+            error = {'type': exc_type, 'value': str(exc_args)}
+        else:
+            error = {'type': ex.__class__.__name__, 'value': str(ex)}
+        self._push_result_topic_pair(ERROR_RESPONSE_PREFIX, point, headers, error)
+        _log.warning('Error handling subscription: ' + str(error))
+
+    def _handle_unknown_reservation_error(self, ex, headers, message):
+        _log.warning(f'bad request: {headers}, {message}, {str(ex)}')
+        results = {
+            'result': "FAILURE",
+            'data': {},
+            'info': 'MALFORMED_REQUEST: ' + ex.__class__.__name__ + ': ' + str(ex)
+        }
+        self.vip.pubsub.publish('pubsub', RESERVATION_RESULT_TOPIC, headers=headers, message=results)
+        return results
+
+
+def main():
     """Main method called to start the agent."""
-    vip_main(initialize_agent, identity=PLATFORM_DRIVER, version=__version__)
+    vip_main(PlatformDriverAgent, identity=PLATFORM_DRIVER, version=__version__)
 
 
 if __name__ == '__main__':

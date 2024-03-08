@@ -83,15 +83,6 @@ def test_set_override_off_should_raise_override_error():
             platform_driver_agent.set_override_off(pattern)
 
 
-def test_derive_device_topic_should_succeed():
-    config_name = "mytopic/foobar_topic"
-    expected_result = "foobar_topic"
-
-    with pdriver() as platform_driver_agent:
-        result = platform_driver_agent.derive_device_topic(config_name)
-        assert result == expected_result
-
-
 def test_stop_driver_should_return_none():
     device_topic = "mytopic/foobar_topic"
 
