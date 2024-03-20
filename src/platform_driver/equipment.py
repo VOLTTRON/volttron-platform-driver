@@ -43,11 +43,11 @@ class EquipmentNode(TopicNode):
     def config(self, value: dict):
         self.data['config'] = value
 
-    def get_controller(self, tree):
+    def get_remote(self, tree):
         if self.is_device():
             return self.data['interface']
         elif not self.is_root():
-            return tree.get_node(self.predecessor(tree.identifier)).get_controller(tree.identifier)
+            return tree.get_node(self.predecessor(tree.identifier)).get_remote(tree.identifier)
         else:
             return None
 
@@ -249,63 +249,63 @@ class EquipmentTree(TopicTree):
 
 
 # TODO: Probably remove this block entirely.
-# ControllerGroupingType = Enum('node_type', ['Parallel', 'Sequential', 'Serial'])
+# RemoteGroupingType = Enum('node_type', ['Parallel', 'Sequential', 'Serial'])
 #
-# class DuplicateControllerError(Exception):
-#     """Exception thrown if Controller is already attached to another group."""
+# class DuplicateRemoteError(Exception):
+#     """Exception thrown if Remote is already attached to another group."""
 #     pass
 #
 #
-# class ControllerNode(Node):
+# class RemoteNode(Node):
 #     def __init__(self,
 #                  group_id: str = None,
 #                  grouping_type: str = 'Sequential',
 #                  minimum_offset: float = 0.0,
 #                  *args, **kwargs):
 #         identifier = kwargs.pop('identifier', group_id)
-#         super(ControllerNode, self).__init__(tag=group_id, identifier=identifier, *args, **kwargs)
-#         self.type = ControllerGroupingType[grouping_type.title()]
+#         super(RemoteNode, self).__init__(tag=group_id, identifier=identifier, *args, **kwargs)
+#         self.type = RemoteGroupingType[grouping_type.title()]
 #         self.minimum_offset = minimum_offset
-#         self.controllers = WeakSet()
+#         self.remotes = WeakSet()
 #
 #
-# class ControllerTree(Tree):
+# class RemoteTree(Tree):
 #     def __init__(self,
 #                  config: dict = None,
 #                  legacy_group_offset_interval: float = 0.0,
 #                  minimum_polling_interval: float = 0.02,
 #                  *args, **kwargs):
-#         super(ControllerTree, self).__init__(node_class=ControllerNode, *args, **kwargs)
+#         super(RemoteTree, self).__init__(node_class=RemoteNode, *args, **kwargs)
 #         config = config if config else {
 #             'minimum_offset': legacy_group_offset_interval,
 #             'children': [{'group_id': '0', 'minimum_offset': minimum_polling_interval}]
 #         }
 #         children = config.pop('children', [])
-#         identifier = config.pop('identifier', config.pop('group_id', 'controllers'))
-#         self.add_node(ControllerNode(identifier=identifier, **config))
+#         identifier = config.pop('identifier', config.pop('group_id', 'remotes'))
+#         self.add_node(RemoteNode(identifier=identifier, **config))
 #         if children:
 #             self._add_children(children, self.get_node(self.root))
 #
-#     def _add_children(self, config: list, parent: ControllerNode):
+#     def _add_children(self, config: list, parent: RemoteNode):
 #         for child in config:
 #             child_group_id = child.get('group_id')
 #             nid = '/'.join([parent.identifier, child_group_id]) if child_group_id else None
 #             grandchildren = child.pop('children', [])
-#             self.add_node(ControllerNode(identifier=nid, **child), parent)
+#             self.add_node(RemoteNode(identifier=nid, **child), parent)
 #             if grandchildren:
 #                 self._add_children(grandchildren, self.get_node(nid))
 #
-#     def add_controller(self, controller: DriverAgent, controller_group_id: str,
-#                        allow_duplicate_controllers: bool = False):
-#         if not allow_duplicate_controllers:
+#     def add_remote(self, remote: DriverAgent, remote_group_id: str,
+#                        allow_duplicate_remotes: bool = False):
+#         if not allow_duplicate_remotes:
 #             for n in self.all_nodes():
-#                 if controller in n.controllers and n.group_id != controller_group_id:
-#                     err = f'Controller already exists in group: {n.identifier} but duplication is not allowed.'
+#                 if remote in n.remotes and n.group_id != remote_group_id:
+#                     err = f'Remote already exists in group: {n.identifier} but duplication is not allowed.'
 #                     raise DuplicatedNodeIdError(err)
-#         self.get_node(controller_group_id).controllers.add(controller)
+#         self.get_node(remote_group_id).remotes.add(remote)
 #
-#     def remove_controller(self, controller: DriverAgent, nid: str):
-#         self.get_node(nid).controllers.remove(controller)
+#     def remove_remote(self, remote: DriverAgent, nid: str):
+#         self.get_node(nid).remotes.remove(remote)
 #
 #     def schedule_polling(self):
 #         pass

@@ -28,6 +28,7 @@ import logging
 import sys
 
 from collections import defaultdict
+from datetime import datetime
 from pydantic import BaseModel, ValidationError
 from typing import Sequence, Set
 from weakref import WeakValueDictionary
@@ -58,10 +59,10 @@ latest_config_version = 2
 
 class PlatformDriverConfig(BaseModel):
     config_version: int = latest_config_version
-    allow_duplicate_controllers: bool = False
+    allow_duplicate_remotes: bool = False
     allow_no_lock_write: bool = False  # TODO: Alias with "require_reservation_to_write"?
     allow_reschedule: bool = True
-    controller_heartbeat_interval: float = 60.0
+    remote_heartbeat_interval: float = 60.0
     # default_polling_interval: float = 60 # TODO: Is this used?
     group_offset_interval: float = 0.0
     max_concurrent_publishes: int = 10000
@@ -94,6 +95,14 @@ class PlatformDriverConfigV1(PlatformDriverConfig):
     publish_breadth_first_all: bool = False
 
 
+class RemoteConfig(BaseModel):
+    pass
+
+
+class EquipmentConfig(BaseModel):
+    pass
+
+
 class PlatformDriverAgent(Agent):
 
     def __init__(self, **kwargs):
@@ -104,10 +113,10 @@ class PlatformDriverAgent(Agent):
             self.config = self._convert_version_1_configs(self.config)
 
         self.breadth_first_publishes, self.depth_first_publishes = setup_publishes(self.config)
-        self.controller_heartbeat_interval = self.config.controller_heartbeat_interval
+        self.remote_heartbeat_interval = self.config.remote_heartbeat_interval
 
         # Initialize internal data structures:
-        self.controllers = WeakValueDictionary()
+        self.remotes = WeakValueDictionary()
         self.equipment_tree = EquipmentTree()
         self.interface_classes = {}
 
@@ -131,11 +140,12 @@ class PlatformDriverAgent(Agent):
     # Configuration & Startup
     #########################
 
-    def _convert_version_1_configs(self, config):
+    @staticmethod
+    def _convert_version_1_configs(config: PlatformDriverConfig):
         config.minimum_polling_interval = config.driver_scrape_interval
         return config
 
-    def _load_versioned_config(self, config):
+    def _load_versioned_config(self, config: dict):
         if not config: # There is no configuration yet, just loading defaults. No need to warn about versions.
             return PlatformDriverConfigV1()
         config_version = config.get('config_version', 1)
@@ -156,7 +166,7 @@ class PlatformDriverAgent(Agent):
                 self.vip.health.set_status(STATUS_BAD, "Error processing configuration: {e}")
             return PlatformDriverConfigV2()
 
-    def configure_main(self, _, action, contents):
+    def configure_main(self, _, action: str, contents: dict):
         _log.debug("############# STARTING CONFIGURE_MAIN")
         old_config = self.config.copy()
         new_config = self._load_versioned_config(contents)
@@ -210,7 +220,7 @@ class PlatformDriverAgent(Agent):
 
         self.breadth_first_publishes, self.depth_first_publishes = setup_publishes(self.config)
         # Update the publication settings on running devices.
-        for driver in self.controllers.values():
+        for driver in self.remotes.values():
             driver.update_publish_types(self.breadth_first_publishes, self.depth_first_publishes)
 
         # Set up Poll Scheduler:
@@ -227,14 +237,13 @@ class PlatformDriverAgent(Agent):
             self.reservation_manager.set_grace_period(self.config.reservation_preempt_grace_time)
 
         # Set up heartbeat to devices:
-        # TODO: Should this be globally uniform (here), by device (in controller), or globally scheduled (in poll scheduler)?
+        # TODO: Should this be globally uniform (here), by device (in remote), or globally scheduled (in poll scheduler)?
         # Only restart the heartbeat if it changes.
-        if (self.config.controller_heartbeat_interval != self.controller_heartbeat_interval
+        if (self.config.remote_heartbeat_interval != self.remote_heartbeat_interval
                 or action == "NEW" or self.heartbeat_greenlet is None):
             if self.heartbeat_greenlet is not None:
                 self.heartbeat_greenlet.kill()
-            self.controller_heartbeat_interval = self.config.controller_heartbeat_interval
-            self.heartbeat_greenlet = self.core.periodic(self.controller_heartbeat_interval, self.heart_beat)
+            self.heartbeat_greenlet = self.core.periodic(self.config.remote_heartbeat_interval, self.heart_beat)
 
         # Start subscriptions:
         current_subscriptions = {topic: subscribed for _, topic, subscribed in self.vip.pubsub.list('pubsub').get()}
@@ -247,15 +256,6 @@ class PlatformDriverAgent(Agent):
         ]:
             if not current_subscriptions.get(topic):
                 self.vip.pubsub.subscribe('pubsub', topic, callback)
-        # TODO: Is the check above a helpful improvement, or should we just use this to subscribe?:
-        # #if not self.subscriptions_setup and self.reservation_manager is not None:
-        #     # Do this after the Reservation Manager is setup.
-        #     self.vip.pubsub.subscribe('pubsub', PUBSUB_GET_TOPIC, self.handle_get)
-        #     self.vip.pubsub.subscribe('pubsub', PUBSUB_SET_TOPIC, self.handle_set)
-        #     self.vip.pubsub.subscribe('pubsub', PUBSUB_RESERVATION_TOPIC, self.handle_reservation_request)
-        #     self.vip.pubsub.subscribe('pubsub', PUBSUB_REVERT_POINT_TOPIC, self.handle_revert_point)
-        #     self.vip.pubsub.subscribe('pubsub', PUBSUB_REVERT_DEVICE_TOPIC, self.handle_revert_device)
-        #     self.subscriptions_setup = True
 
         # Load Equipment Tree:
         for c in self.vip.config.list():
@@ -278,14 +278,16 @@ class PlatformDriverAgent(Agent):
         _log.error(f"########## RUNNING ON_START (REMOVING LOCK).")
         self.equipment_config_lock = False
 
-    def _configure_new_equipment(self, config_name, _, contents, schedule_now=True):
+    def _configure_new_equipment(self, config_name: str, _, contents: dict, schedule_now: bool = True):
+        # TODO: Should contents be a config object for the remote or equipment config already? Where does that validate?
         if self.equipment_tree.get_node(config_name):
+            # TODO: Specify what action was taken here.
             _log.warning(f'Received a NEW configuration for equipment which already exists: {config_name}')
             return
-        if contents.get('controller_config', contents).get('driver_type'):
+        if contents.get('remote_config', contents).get('driver_type'):
             # Received new device node.
             try:
-                driver = self._get_or_create_controller(config_name, contents)
+                driver = self._get_or_create_remote(config_name, contents)
             except ValueError as e:
                 _log.warning(f'Skipping configuration of equipment: {config_name} after encountering error --- {e}')
                 return
@@ -296,20 +298,21 @@ class PlatformDriverAgent(Agent):
         if schedule_now:
             self.poll_scheduler.schedule()
 
-    def _get_or_create_controller(self, equipment_name, config):
+    def _get_or_create_remote(self, equipment_name: str, config: RemoteConfig):
         # TODO: This has gotten reworked a few times, and may not entirely make sense anymore
         #  for where everything ends up and what we are manipulating to manage versions.
         if self.config.config_version >= 2:
-            interface_name = config['controller_config'].get('driver_type')
-            controller_group = config['controller_config'].get('group', '0')
-            config['controller_config']['group'] = controller_group
-            controller_config = config['controller_config']
+            # TODO: Make this use the pydantic models. Should the config variable be RemoteConfig or EquipmentConfig?
+            interface_name = config['remote_config'].get('driver_type')
+            remote_group = config['remote_config'].get('group', '0')
+            config['remote_config']['group'] = remote_group
+            remote_config = config['remote_config']
         else:
             interface_name = config.get('driver_type')
-            controller_group = config.get('group', '0')
-            controller_config = config['driver_config']
-            controller_config['group'] = controller_group
-            controller_config['driver_type'] = interface_name
+            remote_group = config.get('group', '0')
+            remote_config = config['driver_config']
+            remote_config['group'] = remote_group
+            remote_config['driver_type'] = interface_name
         if not interface_name:
             raise ValueError(f'Unable to configure driver for equipment: "{equipment_name}"'
                              f' as it does not have a specified interface.')
@@ -317,7 +320,7 @@ class PlatformDriverAgent(Agent):
             interface = self.interface_classes.get(interface_name)
             if not interface:
                 try:
-                    module = controller_config.get('module')
+                    module = remote_config.get('module')
                     interface = BaseInterface.get_interface_subclass(interface_name, module)
                 except (ModuleNotFoundError, ValueError) as e:
                     raise ValueError(f'Unable to configure driver for equipment: "{equipment_name}"'
@@ -326,26 +329,26 @@ class PlatformDriverAgent(Agent):
                                      f' Received exception: {e}')
                 self.interface_classes[interface_name] = interface
 
-            allow_duplicate_controllers = True if (controller_config.get('allow_duplicate_controllers')
-                                                   or self.config.allow_duplicate_controllers) else False
-            if not allow_duplicate_controllers:
-                unique_controller_id = interface.unique_controller_id(equipment_name, controller_config)
+            allow_duplicate_remotes = True if (remote_config.get('allow_duplicate_remotes')
+                                                   or self.config.allow_duplicate_remotes) else False
+            if not allow_duplicate_remotes:
+                unique_remote_id = interface.unique_remote_id(equipment_name, remote_config)
             else:
-                unique_controller_id = BaseInterface.unique_controller_id(equipment_name, controller_config)
+                unique_remote_id = BaseInterface.unique_remote_id(equipment_name, remote_config)
 
-            driver_agent = self.controllers.get(unique_controller_id)
+            driver_agent = self.remotes.get(unique_remote_id)
             if not driver_agent:
-                _log.info("Starting driver: {}".format(unique_controller_id))
+                _log.info("Starting driver: {}".format(unique_remote_id))
                 _log.debug('GIVING NEW DRIVER CONFIG: ')
                 _log.debug(config)
-                driver_agent = DriverAgent(self, config, unique_controller_id)
-                _log.debug(f"SPAWNING GREENLET for: {unique_controller_id}")
+                driver_agent = DriverAgent(self, config, unique_remote_id)
+                _log.debug(f"SPAWNING GREENLET for: {unique_remote_id}")
                 gevent.spawn(driver_agent.core.run)
                 # TODO: Were the right number spawned? Need more debug code to ascertain this is working correctly.
-                self.controllers[unique_controller_id] = driver_agent
+                self.remotes[unique_remote_id] = driver_agent
             return driver_agent
 
-    def update_equipment(self, config_name, action, contents):
+    def update_equipment(self, config_name: str, action: str, contents: dict):
         """Callback for updating equipment configuration."""
         if self.equipment_config_lock:
             _log.debug(f'############# {action} ACTION RAN! THE LOCK IS SET! ##############')
@@ -354,7 +357,7 @@ class PlatformDriverAgent(Agent):
         _log.debug(f'############ {action} ACTION RAN! UH OH, NO LOCK!!! ##############')
         self.poll_scheduler.check_for_reschedule()
 
-    def remove_equipment(self, config_name, _, __):
+    def remove_equipment(self, config_name: str, _, __):
         """Callback to remove equipment configuration."""
         self.equipment_tree.remove_segment(config_name)
         # TODO: Implement override handling.
@@ -402,12 +405,12 @@ class PlatformDriverAgent(Agent):
 
     def build_query_plan(self, topic: str | Sequence[str] | Set[str] = None, regex: str = None, tag: str = None
                          ) -> dict[DriverAgent, set[PointNode]]:
-        """ Find points to be queried and organize by controller."""
+        """ Find points to be queried and organize by remote."""
         working_tree = self.find_working_tree(topic, regex, tag)
-        # Build controller: set of points dictionary.
+        # Build remote: set of points dictionary.
         query_plan = defaultdict(set)
         for p in working_tree.points():
-            query_plan[p.get_controller(working_tree.identifier)].add(p)
+            query_plan[p.get_remote(working_tree.identifier)].add(p)
         return query_plan
 
     ###############
@@ -419,14 +422,14 @@ class PlatformDriverAgent(Agent):
         _log.debug("############ IN GET")
         results = {}
         errors = {}
-        # Find set of points to query and organize by controller:
+        # Find set of points to query and organize by remote:
         _log.debug("########### BEFORE QUERY PLAN")
         query_plan = self.build_query_plan(topic, regex, tag)
         _log.debug("############ AFTER QUERY PLAN")
-        # Make query for selected points on each controller:
-        for (controller, point_set) in query_plan.items():
-            print(f'For controller: {controller}, point_set is: {point_set}')
-            query_return_values, query_return_errors = controller.get_multiple_points([p.topic for p in point_set])
+        # Make query for selected points on each remote:
+        for (remote, point_set) in query_plan.items():
+            print(f'For remote: {remote}, point_set is: {point_set}')
+            query_return_values, query_return_errors = remote.get_multiple_points([p.topic for p in point_set])
             for topic, val in query_return_values.items():
                 self.equipment_tree.get_node(topic).last_value(val)
             results.update(query_return_values)
@@ -435,7 +438,7 @@ class PlatformDriverAgent(Agent):
 
     @RPC.export
     def set(self, value: any, topic: str | Sequence[str] | Set[str] = None, tag: str = None, regex: str = None,
-            confirm_values: bool = False, map_points=False) -> dict:
+            confirm_values: bool = False, map_points=False) -> (dict, dict):
         # TODO: Implement set() following get() pattern.
         # TODO: If map points is True, interpret value dictionary as point: value mapping.
         pass
@@ -567,7 +570,8 @@ class PlatformDriverAgent(Agent):
     # Overrides
     #----------
     @RPC.export
-    def set_override_on(self, pattern, duration=0.0, failsafe_revert=True, staggered_revert=False):
+    def set_override_on(self, pattern: str, duration: float = 0.0,
+                        failsafe_revert: bool = True, staggered_revert: bool = False):
         """RPC method
 
         Turn on override condition on all the devices matching the pattern.
@@ -589,7 +593,7 @@ class PlatformDriverAgent(Agent):
         self.override_manager.set_on(pattern, duration, failsafe_revert, staggered_revert)
 
     @RPC.export
-    def set_override_off(self, pattern):
+    def set_override_off(self, pattern: str):
         """RPC method
 
         Turn off override condition on all the devices matching the pattern. The pattern matching is based on bash style
@@ -628,7 +632,7 @@ class PlatformDriverAgent(Agent):
     # Legacy RPC Methods
     #-------------------
     @RPC.export
-    def get_point(self, path=None, point_name=None, **kwargs) -> any:
+    def get_point(self, path: str = None, point_name: str = None, **kwargs) -> any:
         """
         RPC method
 
@@ -656,10 +660,10 @@ class PlatformDriverAgent(Agent):
         node = self.equipment_tree.get_node(self._equipment_id(path, point_name))
         if not node:
             raise ValueError(f'No equipment found for topic: {"/".join([path, point_name])}')
-        controller = node.get_controller(self.equipment_tree)
-        if not controller:
-            raise ValueError(f'No controller found for topic: {"/".join([path, point_name])}')
-        return controller.get_point(point_name, **kwargs)
+        remote = node.get_remote(self.equipment_tree)
+        if not remote:
+            raise ValueError(f'No remote found for topic: {"/".join([path, point_name])}')
+        return remote.get_point(point_name, **kwargs)
 
     @RPC.export
     def set_point(self, path: str, point_name: str | None, value: any, *args, **kwargs) -> any:
@@ -704,17 +708,17 @@ class PlatformDriverAgent(Agent):
         if not node:
             raise ValueError(f'No equipment found for topic: {"/".join([path, point_name])}')
         self.equipment_tree.raise_on_locks(node, sender)
-        controller = node.get_controller(self.equipment_tree.identifier)
-        if not controller:
-            raise ValueError(f'No controller found for topic: {"/".join([path, point_name])}')
-        result = controller.set_point(point_name, value, **kwargs)
+        remote = node.get_remote(self.equipment_tree.identifier)
+        if not remote:
+            raise ValueError(f'No remote found for topic: {"/".join([path, point_name])}')
+        result = remote.set_point(point_name, value, **kwargs)
         headers = self._get_headers(sender)
         self._push_result_topic_pair(WRITE_ATTEMPT_PREFIX, topic, headers, value)
         self._push_result_topic_pair(VALUE_RESPONSE_PREFIX, topic, headers, result)
         return result
 
     @RPC.export
-    def scrape_all(self, topic: str):
+    def scrape_all(self, topic: str) -> dict:
         """RPC method
 
         Get all points from a device.
@@ -726,7 +730,8 @@ class PlatformDriverAgent(Agent):
         return self.get(topic=path)
 
     @RPC.export
-    def get_multiple_points(self, path: str | Sequence[str | Sequence] = None, point_names = None, **kwargs):
+    def get_multiple_points(self, path: str | Sequence[str | Sequence] = None, point_names = None,
+                            **kwargs) -> (dict, dict):
         """RPC method
 
         Get multiple points on multiple devices. Makes a single
@@ -771,7 +776,7 @@ class PlatformDriverAgent(Agent):
         return results, errors
 
     @RPC.export
-    def set_multiple_points(self, path, point_names_values, **kwargs):
+    def set_multiple_points(self, path: str, point_names_values: list[tuple[str, any]], **kwargs) -> dict:
         """RPC method
 
         Set values on multiple set points at once. If global override is condition is set,raise OverrideError exception.
@@ -801,9 +806,9 @@ class PlatformDriverAgent(Agent):
             for point, value in point_names_values:
                 topic_value_map[self._equipment_id(path, point)] = value
 
-        # TODO: Check that set() really returns two dicts and that latter is errors.
         _, ret_errors = self.set(topic_value_map, map_points=True, **kwargs)
-        return errors.update(ret_errors)
+        errors.update(ret_errors)
+        return errors
 
     @RPC.export
     def heart_beat(self):
@@ -812,7 +817,7 @@ class PlatformDriverAgent(Agent):
         Sends heartbeat to all devices
         """
         _log.debug("sending heartbeat")
-        for device in self.controllers.values():
+        for device in self.remotes.values():
             device.heart_beat()
 
     @RPC.export
@@ -849,14 +854,14 @@ class PlatformDriverAgent(Agent):
         if not node:
             raise ValueError(f'No equipment found for topic: {"/".join([path, point_name])}')
         self.equipment_tree.raise_on_locks(node, sender)
-        controller = node.get_controller(self.equipment_tree.identifier)
-        controller.revert_point(point_name, **kwargs)
+        remote = node.get_remote(self.equipment_tree.identifier)
+        remote.revert_point(point_name, **kwargs)
 
         headers = self._get_headers(sender)
         self._push_result_topic_pair(REVERT_POINT_RESPONSE_PREFIX, topic, headers, None)
 
     @RPC.export
-    def revert_device(self, path, *args, **kwargs):
+    def revert_device(self, path: str, *args, **kwargs):
         """RPC method
 
         Revert all the set point values of the device to default state/values. If global override is condition is set,
@@ -880,17 +885,18 @@ class PlatformDriverAgent(Agent):
 
         node = self.equipment_tree.get_node(self._equipment_id(path, None))
         if not node:
-            raise ValueError(f'No equipment found for topic: {"/".join([path, point_name])}')
+            raise ValueError(f'No equipment found for topic: {path}')
         self.equipment_tree.raise_on_locks(node, sender)
-        controller = node.get_controller(self.equipment_tree.identifier)
-        controller.revert_all(**kwargs)
+        remote = node.get_remote(self.equipment_tree.identifier)
+        remote.revert_all(**kwargs)
 
         headers = self._get_headers(sender)
         self._push_result_topic_pair(REVERT_DEVICE_RESPONSE_PREFIX, topic, headers, None)
 
 
     @RPC.export
-    def request_new_schedule(self, requester_id, task_id, priority, requests):
+    def request_new_schedule(self, requester_id: str, task_id: str, priority: str,
+                             requests: list[list[str]] | list[str]) -> dict:
         """
         RPC method
 
@@ -920,7 +926,7 @@ class PlatformDriverAgent(Agent):
         return self.reservation_manager.new_task(rpc_peer, task_id, priority, requests)
 
     @RPC.export
-    def request_cancel_schedule(self, requester_id, task_id):
+    def request_cancel_schedule(self, requester_id: str, task_id: str) -> dict:
         """RPC method
 
         Requests the cancellation of the specified task id.
@@ -948,7 +954,7 @@ class PlatformDriverAgent(Agent):
     # PubSub Interface
     ##################
 
-    def handle_get(self, _, sender, __, topic, ___, ____):
+    def handle_get(self, _, sender: str, __, topic: str, ___, ____):
         """
         Requests up-to-date value of a point.
 
@@ -981,7 +987,7 @@ class PlatformDriverAgent(Agent):
             self._handle_error(ex, point, headers)
 
 
-    def handle_set(self, _, sender, __, topic, ___, message):
+    def handle_set(self, _, sender: str, __, topic: str, ___, message: any):
         """
         Set the value of a point.
 
@@ -1024,7 +1030,7 @@ class PlatformDriverAgent(Agent):
         except Exception as ex:
             self._handle_error(ex, point, headers)
 
-    def handle_revert_point(self, _, sender, __, topic, ___, ____):
+    def handle_revert_point(self, _, sender: str, __, topic: str, ___, ____):
         """
         Revert the value of a point.
 
@@ -1060,14 +1066,14 @@ class PlatformDriverAgent(Agent):
         try:
             node = self.equipment_tree.get_node(topic)
             self.equipment_tree.raise_on_locks(node, sender)
-            controller = node.get_controller(self.equipment_tree.identifier)
-            controller.revert_point(point)
+            remote = node.get_remote(self.equipment_tree.identifier)
+            remote.revert_point(point)
 
             self._push_result_topic_pair(REVERT_POINT_RESPONSE_PREFIX, topic, headers, None)
         except Exception as ex:
             self._handle_error(ex, point, headers)
 
-    def handle_revert_device(self, _, sender, __, topic, ___, ____):
+    def handle_revert_device(self, _, sender: str, __, topic: str, ___, ____):
         """
         Revert all the writable values on a device.
 
@@ -1101,15 +1107,16 @@ class PlatformDriverAgent(Agent):
         try:
             node = self.equipment_tree.get_node(topic)
             self.equipment_tree.raise_on_locks(node, sender)
-            controller = node.get_controller(self.equipment_tree.identifier)
-            controller.revert_all()
+            remote = node.get_remote(self.equipment_tree.identifier)
+            remote.revert_all()
 
             self._push_result_topic_pair(REVERT_DEVICE_RESPONSE_PREFIX, topic, headers, None)
 
         except Exception as ex:
             self._handle_error(ex, topic, headers)
 
-    def handle_reservation_request(self, _, sender, __, topic, headers, message):
+    def handle_reservation_request(self, _, sender: str, __, topic: str, headers: dict,
+                                   message: list[list[str]] | list[str]):
         """
         Schedule request pub/sub handler
 
@@ -1197,7 +1204,7 @@ class PlatformDriverAgent(Agent):
                     'data': {}
                 }
                 topic = RESERVATION_RESULT_TOPIC
-                headers = self._get_headers(sender, format_timestamp(now), task_id, RESERVATION_ACTION_CANCEL)
+                headers = self._get_headers(sender, now, task_id, RESERVATION_ACTION_CANCEL)
                 self.vip.pubsub.publish('pubsub', topic, headers=headers, message=message)
 
             except Exception as ex:
@@ -1232,13 +1239,8 @@ class PlatformDriverAgent(Agent):
         return path
 
     @staticmethod
-    def _get_headers(requester, time=None, task_id=None, action_type=None):
-        headers = {}
-        if time is not None:
-            headers['time'] = time
-        else:
-            utcnow = get_aware_utc_now()
-            headers = {'time': format_timestamp(utcnow)}
+    def _get_headers(requester: str, time: datetime = None, task_id: str = None, action_type: str = None):
+        headers = {'time': format_timestamp(time) if time else format_timestamp(get_aware_utc_now())}
         if requester is not None:
             headers['requesterID'] = requester
         if task_id is not None:
@@ -1247,11 +1249,11 @@ class PlatformDriverAgent(Agent):
             headers['type'] = action_type
         return headers
 
-    def _push_result_topic_pair(self, prefix, point, headers, value):
+    def _push_result_topic_pair(self, prefix: str, point: str, headers: dict, value: any):
         topic = normtopic('/'.join([prefix, point]))
         self.vip.pubsub.publish('pubsub', topic, headers, message=value)
 
-    def _handle_error(self, ex, point, headers):
+    def _handle_error(self, ex: BaseException, point: str, headers: dict):
         if isinstance(ex, RemoteError):
             try:
                 exc_type = ex.exc_info['exc_type']
@@ -1265,7 +1267,7 @@ class PlatformDriverAgent(Agent):
         self._push_result_topic_pair(ERROR_RESPONSE_PREFIX, point, headers, error)
         _log.warning('Error handling subscription: ' + str(error))
 
-    def _handle_unknown_reservation_error(self, ex, headers, message):
+    def _handle_unknown_reservation_error(self, ex: BaseException, headers: dict, message: list[list[str]] | list[str]):
         _log.warning(f'bad request: {headers}, {message}, {str(ex)}')
         results = {
             'result': "FAILURE",

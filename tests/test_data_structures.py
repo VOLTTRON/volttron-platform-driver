@@ -2,7 +2,7 @@ import json
 import pathlib
 import pytest
 
-from volttron.services.driver.data_structures import ControllerTree, DeviceNode, EquipmentTree, EquipmentNode, PointNode
+from volttron.services.driver.data_structures import RemoteTree, DeviceNode, EquipmentTree, EquipmentNode, PointNode
 from volttron.services.driver.platform_driver_service import DriverAgent
 
 SAMPLE_REGISTRY = [{'Point Name': 'EKG', 'Volttron Point Name': 'EKG', 'Units': 'waveform', 'Units Details': 'waveform', 'Writable': 'TRUE', 'Starting Value': 'sin', 'Type': 'float', 'Notes': 'Sine wavefor baseline output'},
@@ -29,15 +29,15 @@ SAMPLE_REGISTRY = [{'Point Name': 'EKG', 'Volttron Point Name': 'EKG', 'Units': 
 {'Point Name': 'ERWH_Phy0_ValveState', 'Volttron Point Name': 'ValveState', 'Units': '1/0', 'Units Details': '1/0', 'Writable': 'TRUE', 'Starting Value': '0', 'Type': 'int', 'Notes': 'power on off status'}
 ]
 
-def test_build_controller_tree(controller_tree):
-    assert controller_tree.to_dict() == {'controllers': {'children': ['0', {'Panel2': {'children': ['Bus1', 'Bus2']}}]}}
+def test_build_remote_tree(remote_tree):
+    assert remote_tree.to_dict() == {'remotes': {'children': ['0', {'Panel2': {'children': ['Bus1', 'Bus2']}}]}}
 
-def test_add_and_remove_controller(controller_tree, driver_agent):
-    group_id = 'controllers/Panel2/Bus1'
-    controller_tree.add_controller(driver_agent, group_id)
-    assert driver_agent in controller_tree.get_node(group_id).controllers
-    controller_tree.remove_controller(driver_agent, group_id)
-    assert driver_agent not in controller_tree.get_node(group_id).controllers
+def test_add_and_remove_remote(remote_tree, driver_agent):
+    group_id = 'remotes/Panel2/Bus1'
+    remote_tree.add_remote(driver_agent, group_id)
+    assert driver_agent in remote_tree.get_node(group_id).remotes
+    remote_tree.remove_remote(driver_agent, group_id)
+    assert driver_agent not in remote_tree.get_node(group_id).remotes
 
 def test_build_equipment_tree(driver_agent):
     et = EquipmentTree()

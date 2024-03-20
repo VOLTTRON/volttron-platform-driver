@@ -60,19 +60,19 @@ class StaticCyclicPollScheduler(PollScheduler):
         pass
     # TODO: Implement Schedule:
     #     super(StaticCyclicPollScheduler, self).schedule()
-    #     if controller_group.type == ControllerGroupingType['Parallel']:
-    #         # TODO: Parallel Regime (schedule each controller’s poll set individually):
+    #     if remote_group.type == RemoteGroupingType['Parallel']:
+    #         # TODO: Parallel Regime (schedule each remote’s poll set individually):
     #         #           For each poll set create NSi = NDi + 1 slots.
     #         #           Spread polls for each device evenly through its own Nsi.
     #         pass
-    #     elif controller_group.type == ControllerGroupingType['Sequential']:
-    #         group_poll_set = self._combine_poll_sets([self.poll_sets[c] for c in controller_group.controllers])
-    #         # TODO: Sequential Regime (schedule all polls for all controllers in one sequential poll set):
+    #     elif remote_group.type == RemoteGroupingType['Sequential']:
+    #         group_poll_set = self._combine_poll_sets([self.poll_sets[c] for c in remote_group.remotes])
+    #         # TODO: Sequential Regime (schedule all polls for all remotes in one sequential poll set):
     #         #           Create NS = ∑ NDi + 1 slots over max interval of all D.
     #         #           Spread polls for each device evenly through NS, starting with highest frequency polls.
     #
     #         pass
-    #     elif controller_group.type == ControllerGroupingType['Serial']:
+    #     elif remote_group.type == RemoteGroupingType['Serial']:
     #         # TODO: Serial Regime (schedule a single job to poll each item of poll set after the return or failure
     #         #  of the previous):
     #         #  Create timeouts such that enough time is available to address each item in series before the next cycle.
@@ -105,12 +105,12 @@ class StaticCyclicPollScheduler(PollScheduler):
         return separated
 
     def _prepare_to_schedule(self):
-        for controller in self.agent.controllers:
-            # Group points from each of the controller's EquipmentNodes by interval:
+        for remote in self.agent.remotes:
+            # Group points from each of the remote's EquipmentNodes by interval:
             interval_dict = defaultdict(WeakSet)
-            for point in controller.point_set:
+            for point in remote.point_set:
                 interval_dict[point.polling_interval].add(point)
-            self.poll_sets[controller] = interval_dict
+            self.poll_sets[remote] = interval_dict
 
     @staticmethod
     def _combine_poll_sets(poll_set_list):

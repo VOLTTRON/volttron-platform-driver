@@ -20,5 +20,5 @@ class UnknownInterface(BaseInterface):
         pass
 
     @classmethod
-    def unique_controller_id(cls, equipment_name, config, **kwargs):
+    def unique_remote_id(cls, equipment_name, config, **kwargs):
         return 'some', 'unique', 'id'

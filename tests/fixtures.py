@@ -4,18 +4,18 @@ import pathlib
 import pytest
 
 from volttron.driver.base.interfaces import BaseInterface
-from volttron.services.driver.data_structures import ControllerTree
+from volttron.services.driver.data_structures import RemoteTree
 from volttron.services.driver.platform_driver_service import DriverAgent  # TODO: This should import real DriverAgent from base driver and/or a better mock?
 from volttron.services.driver.platform_driver_service import PlatformDriverService
 from volttron.types.server_config import ServerConfig
 
 
 @pytest.fixture
-def controller_tree():
-    config_file = pathlib.Path(__file__).parent.parent.absolute() / 'sample_configs/controller_grouping.json'
+def remote_tree():
+    config_file = pathlib.Path(__file__).parent.parent.absolute() / 'sample_configs/remote_grouping.json'
     with open(config_file) as f:
         config = json.load(f)
-        return ControllerTree(config)
+        return RemoteTree(config)
 
 @pytest.fixture
 def driver_agent():
@@ -25,7 +25,7 @@ def driver_agent():
 def equipped_driver_service(driver_service):
     pds = driver_service
     pds.config_version = 2
-    pds._get_or_create_controller = lambda x, y: driver_agent
+    pds._get_or_create_remote = lambda x, y: driver_agent
 
     topic = 'devices/Foo/Bar/Baz'
     contents = {'driver_type': DummyInterface}
@@ -67,5 +67,5 @@ class DummyInterface(BaseInterface):
         pass
 
     @classmethod
-    def unique_controller_id(cls, equipment_name, config, **kwargs):
+    def unique_remote_id(cls, equipment_name, config, **kwargs):
         return 'some', 'unique', 'id'
