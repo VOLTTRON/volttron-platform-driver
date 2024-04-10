@@ -68,11 +68,11 @@ class TimeSlice(object):
 
     @property
     def end(self):
-        return self.end
+        return self._end
 
     @property
     def start(self):
-        return self.start
+        return self._start
 
     def __cmp__(self, other):
         if self.start >= other.end:
@@ -437,7 +437,8 @@ class ReservationManager(object):
         except Exception:
             _log.error('Failed to save Reservation Manager state!')
 
-    def new_task(self, sender, task_id, requests, priority, now=None):
+    def new_task(self, sender, task_id, priority, requests, now=None):
+        priority = priority.upper()
         local_tz = get_localzone()
         if requests and isinstance(requests[0], str):
             requests = [requests]
@@ -457,7 +458,7 @@ class ReservationManager(object):
             requests.append([device, start, end])
         _log.debug("Got new reservation request: {}, {}, {}, {}".format(sender, task_id, priority,
                                                                         requests))
-
+        
         now = now if now is not None else get_aware_utc_now()
         self._cleanup(now)
 
@@ -491,7 +492,8 @@ class ReservationManager(object):
                                  'MALFORMED_REQUEST: ' + ex.__class__.__name__ + ': ' + str(ex))
 
         conflicts = defaultdict(dict)
-        preempted_tasks = set()
+        preempted_tasks = list(set())
+
         for t_id, task in self.tasks.items():
             conflict_list = new_task.get_conflicts(task)
             sender = task.agent_id
