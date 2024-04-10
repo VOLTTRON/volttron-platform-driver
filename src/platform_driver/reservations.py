@@ -25,6 +25,7 @@
 import bisect
 import logging
 
+from base64 import b64encode
 from collections import defaultdict, namedtuple
 from copy import deepcopy
 from datetime import timedelta
@@ -122,7 +123,6 @@ class Task(object):
         self.time_slice = TimeSlice()
         self.devices = defaultdict(Reservation)
         self.state = Task.STATE_PRE_RUN
-
         self.populate_reservation(requests)
 
     def change_state(self, new_state):
@@ -432,10 +432,10 @@ class ReservationManager(object):
         try:
             self._cleanup(now)
             _log.debug("Saving reservation state")
-            self.parent.vip.config.set(self.reservation_state_file, dumps(self.tasks), send_update=False)
+            self.parent.vip.config.set(self.reservation_state_file, b64encode(dumps(self.tasks)).decode("utf-8"), send_update=False)
 
-        except Exception:
-            _log.error('Failed to save Reservation Manager state!')
+        except Exception as e:
+            _log.error(f'Failed to save Reservation Manager state! Error: {e}')
 
     def new_task(self, sender, task_id, priority, requests, now=None):
         priority = priority.upper()
@@ -456,8 +456,7 @@ class ReservationManager(object):
             if end.tzinfo is None:
                 end = local_tz.localize(end)
             requests.append([device, start, end])
-        _log.debug("Got new reservation request: {}, {}, {}, {}".format(sender, task_id, priority,
-                                                                        requests))
+        _log.debug(f"Got new reservation request: {sender}, {task_id}, {priority}, {requests}")
         
         now = now if now is not None else get_aware_utc_now()
         self._cleanup(now)
@@ -492,7 +491,7 @@ class ReservationManager(object):
                                  'MALFORMED_REQUEST: ' + ex.__class__.__name__ + ': ' + str(ex))
 
         conflicts = defaultdict(dict)
-        preempted_tasks = list(set())
+        preempted_tasks = set()
 
         for t_id, task in self.tasks.items():
             conflict_list = new_task.get_conflicts(task)
@@ -505,6 +504,7 @@ class ReservationManager(object):
         if conflicts:
             return RequestResult(False, conflicts, 'CONFLICTS_WITH_EXISTING_RESERVATIONS')
         self.tasks[task_id] = new_task
+        _log.debug(f"Task added. Total tasks now: {len(self.tasks)}")
 
         # By this point we know that any remaining conflicts can be preempted and the request will succeed.
         for _, t_id in preempted_tasks:
@@ -512,7 +512,10 @@ class ReservationManager(object):
             task.preempt(self.grace_time, now)
         self.save_state(now)
 
-        result = RequestResult(True, preempted_tasks, '')
+        if preempted_tasks:
+            result = RequestResult(True, list(preempted_tasks), 'TASKS_WERE_PREEMPTED')
+        else:
+            return RequestResult(True, {}, '')
         if result.success:
             # TODO: This implies a single device, but the loop above implies potentially multiple.
             #  The update() method sends a publish on the announce/full/device/path topic, implying all devices.
@@ -578,7 +581,6 @@ class ReservationManager(object):
         3. Before handling a reservation submission request.
         4. After handling a reservation submission request.
         5. Before handling a state request."""
-
         # Reset the running tasks.
         self.running_tasks = set()
         self.preempted_tasks = set()
@@ -587,6 +589,7 @@ class ReservationManager(object):
             task = self.tasks[task_id]
             task.make_current(now)
             if task.state == Task.STATE_FINISHED:
+                _log.debug(f"Removing task '{task_id}' because it is finished.")
                 del self.tasks[task_id]
 
             elif task.state == Task.STATE_RUNNING:
