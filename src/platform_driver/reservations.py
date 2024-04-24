@@ -23,7 +23,10 @@
 # }}}
 
 import bisect
+import json
 import logging
+import pickle
+import base64
 
 from base64 import b64encode
 from collections import defaultdict, namedtuple
@@ -424,21 +427,24 @@ class ReservationManager(object):
         try:
             self.tasks = loads(initial_state_string)
             self._cleanup(now)
-        except Exception:
+        except pickle.PickleError as pe:
             self.tasks = {}
-            _log.error('Reservation Manager state file corrupted!')
+            _log.error(f'Pickle error {pe}')
+        except Exception as e:
+            self.tasks = {}
+            _log.error(f'Reservation Manager state file corrupted! Exception {e}')
 
     def save_state(self, now):
         try:
             self._cleanup(now)
-            _log.debug("Saving reservation state")
+            _log.debug(f"Saving {len(self.tasks)} task")
             self.parent.vip.config.set(self.reservation_state_file, b64encode(dumps(self.tasks)).decode("utf-8"), send_update=False)
 
         except Exception as e:
             _log.error(f'Failed to save Reservation Manager state! Error: {e}')
 
     def new_task(self, sender, task_id, priority, requests, now=None):
-        priority = priority.upper()
+        priority = priority.upper() if priority is not None else None
         local_tz = get_localzone()
         if requests and isinstance(requests[0], str):
             requests = [requests]
@@ -532,6 +538,7 @@ class ReservationManager(object):
         if task.agent_id != sender:
             return RequestResult(False, {}, 'AGENT_ID_TASK_ID_MISMATCH')
         del self.tasks[task_id]
+        _log.debug(f"Task {task_id} successfully cancelled.")
         self.save_state(now)
         result = RequestResult(True, {}, '')
         if result.success:
