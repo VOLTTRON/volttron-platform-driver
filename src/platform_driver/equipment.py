@@ -1,12 +1,15 @@
+import gevent
+import json
 import logging
 
 from datetime import datetime
 from enum import Enum
 from treelib.exceptions import DuplicatedNodeIdError
-from typing import Optional, Union
+from typing import Iterable, Optional, Union
 
-from volttron.lib.topic_tree import TopicNode, TopicTree
+from volttron.client.known_identities import CONFIGURATION_STORE
 from volttron.driver.base.driver import DriverAgent
+from volttron.lib.topic_tree import TopicNode, TopicTree
 from volttron.utils import get_aware_utc_now, setup_logging
 
 from .overrides import OverrideError
@@ -20,15 +23,20 @@ class EquipmentNode(TopicNode):
     def __init__(self, config=None, *args, **kwargs):
         super(EquipmentNode, self).__init__(*args, **kwargs)
         config = config if config is not None else {}
-        self.data['active']: bool = config.get('active', True)
+        self.data['active']: bool = config.get('active', config.get('Active', True))
         self.data['config'] = config
+        self.data['interface'] = None
         self.data['meta_data']: dict = config.get('meta_data', {})
+        # TODO: should ephemeral values like overridden and reserved_by be properties stored in data?
+        self.data['overridden']: bool = False
         self.data['polling_interval']: float = config.get('polling_interval', 0)
+        self.data['reservation_required_for_write']: bool = config.get('reservation_required_for_write', False)
+        self.data['reserved_by'] = None
         self.data['segment_type'] = 'TOPIC_SEGMENT'
 
     @property
     def active(self) -> bool:
-        # TODO: Make this inherit from parents.
+        # TODO: Make this inherit from parents or use et.rsearch when accessing it.
         return self.data['active']
 
     @active.setter
@@ -43,8 +51,9 @@ class EquipmentNode(TopicNode):
     def config(self, value: dict):
         self.data['config'] = value
 
+    # TODO: Consider replacing uses of this with et.get_remote(nid).
     def get_remote(self, tree):
-        if self.is_device():
+        if self.is_device:
             return self.data['interface']
         elif not self.is_root():
             return tree.get_node(self.predecessor(tree.identifier)).get_remote(tree.identifier)
@@ -68,36 +77,73 @@ class EquipmentNode(TopicNode):
     def polling_interval(self, value: float):
         self.data['polling_interval'] = value
 
+    @property
     def is_point(self):
         return True if self.segment_type == 'POINT' else False
 
+    @property
     def is_device(self):
         return True if self.segment_type == 'DEVICE' else False
 
     @property
-    def overridden(self):
-        # TODO: Implement overridden property (Override handling)
-        #  -- include parents.
-        return False
+    def overridden(self) -> bool:
+        return self.data['overridden']
 
-    def reserved(self,  sender):
-        # TODO: Implement reserved(sender)
-        #  -- check that the topic is not reserved by someone other than sender.
-        #  -- include parents.
-        is_reserved = False
-        holder = ''
-        return is_reserved, holder
+    @overridden.setter
+    def overridden(self, value: bool):
+        self.data['overridden'] = value
 
+    @property
+    def reservation_required_for_write(self) -> bool:
+        return self.data['reservation_required_for_write']
+
+    @reservation_required_for_write.setter
+    def reservation_required_for_write(self, value: bool):
+        self.data['reservation_required_for_write'] = value
+
+    @property
+    def reserved(self):
+        return self.data['reserved_by']
+
+    @reserved.setter
+    def reserved(self, holder: str):
+        self.data['reserved_by'] = holder
 
 class DeviceNode(EquipmentNode):
     def __init__(self, config, driver, *args, **kwargs):
+        config = config.copy()
         super(DeviceNode, self).__init__(config, *args, **kwargs)
         self.data['interface']: DriverAgent = driver  # TODO: Should this just be the interface?
+        self.data['registry']: dict = config.pop('registry_config', [])
+        self.data['registry_name'] = None
         self.data['segment_type'] = 'DEVICE'
 
     @property
     def interface(self) -> DriverAgent:
         return self.data['interface']
+
+    @property
+    def registry(self) -> dict:
+        return self.data['registry']
+
+    def set_registry_name(self):
+        # TODO: This method should be unnecessary, if we can just get the registry_name in the config_store push.
+        #  The registry name itself was not available at configuration time
+        #   and is not returned by the self.config.get() method ( it is dereferenced, already).
+        try:
+            remote_conf_json = self.interface.parent.vip.rpc.call(CONFIGURATION_STORE, 'manage_get',
+                                                             self.interface.parent.core.identity, self.identifier
+                                                             ).get(timeout=5)
+            remote_conf = json.loads(remote_conf_json)
+            self.data['registry_name'] = remote_conf.get('registry_config')
+        except (Exception, gevent.Timeout) as e:
+            _log.warning(f'Unable to set registry_name for device: {self.identifier} -- {e}')
+
+    def update_registry_row(self, row: dict):
+        self.data['registry'] = [row if r['Volttron Point Name'] == row['Volttron Point Name'] else r
+                                 for r in self.data['registry']]
+        if self.data['registry_name']:
+            self.interface.parent.vip.config.set(self.data['registry_name'], self.registry)
 
     def stop_device(self):
         _log.info(f"Stopping driver: {self.identifier}")
@@ -169,6 +215,7 @@ class EquipmentTree(TopicTree):
         equipment_specific_fields = config.get('equipment_specific_fields', {})
         try:
             device_node = DeviceNode(config=config, driver=driver_agent, tag=device_name, identifier=device_topic)
+            device_node.set_registry_name()
             self.add_node(device_node, parent=parent)
         except DuplicatedNodeIdError:
             # TODO: If the node already exists, update it as necessary?
@@ -215,7 +262,7 @@ class EquipmentTree(TopicTree):
 
     def remove_segment(self, identifier):
         node = self.get_node(identifier)
-        if node.is_device():
+        if node.is_device:
             node.stop_device()
         if node.has_concrete_successors(self): # TODO: Implement EquipmentNode.has_concrete_successors().
             node.wipe_configuration()  # TODO: Implement EquipmentNode.wipe_configuration().
@@ -224,28 +271,37 @@ class EquipmentTree(TopicTree):
 
     def points(self, nid=None):
         if nid is None:
-            points = [n for n in self._nodes.values() if n.is_point()]
+            points = [n for n in self._nodes.values() if n.is_point]
         else:
-            points = [self[n] for n in self.expand_tree(nid) if self[n].is_point()]
+            points = [self[n] for n in self.expand_tree(nid) if self[n].is_point]
         return points
 
     def devices(self, nid=None):
         if nid is None:
-            points = [n for n in self._nodes.values() if n.is_device()]
+            devices = [n for n in self._nodes.values() if n.is_device]
         else:
-            points = [self[n] for n in self.expand_tree(nid) if self[n].is_device()]
-        return points
+            devices = [self[n] for n in self.expand_tree(nid) if self[n].is_device]
+        return devices
+
+    def find_points(self, topic_pattern: str = '', regex: str = None, exact_matches: Iterable = None) -> Iterable:
+        return (p for p in self.find_leaves(topic_pattern, regex, exact_matches) if p.is_point)
 
     def raise_on_locks(self, node: EquipmentNode, requester: str):
-        reserved, holder = node.reserved(requester)
-        if reserved and not node.identifier == holder:
+        reserved = next(self.rsearch(node.identifier, lambda n: n.reserved))
+        if reserved and not node.identifier == reserved:
             raise ReservationLockError(f"Equipment {node.identifier} is reserved by another party."
                                        f" ({requester}) does not have permission to write at this time.")
-        elif not reserved and self.reservation_required_for_write:
+        elif not reserved and any(self.rsearch(node.identifier, lambda n: n.reservation_required_for_write)):
             raise ReservationLockError(f'Caller ({requester}) does not have a reservation '
                                        f'for equipment {node.identifier}. A reservation is required to write.')
-        elif node.overridden:
+        elif any(self.rsearch(node.identifier, lambda n: n.overridden)):
             raise OverrideError(f"Cannot set point on {node.identifier} since global override is set")
+        
+    def get_device_node(self, nid: str) -> DeviceNode:
+        return self.get_node(next(self.rsearch(nid, lambda n: n.is_device)))
+
+    def get_remote(self, nid: str) -> DriverAgent:
+        return self.get_device_node(nid).interface
 
 
 # TODO: Probably remove this block entirely.
