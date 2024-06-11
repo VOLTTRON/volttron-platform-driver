@@ -24,7 +24,7 @@ class OverrideManager:
         self.patterns = set()
 
         try:
-            values = loads(self.parent.vip.config.get("override_patterns"))
+            values = loads(self.parent.vip.config.get("_override_patterns"))
             if isinstance(values, dict):
                 for pattern, end_time in values.items():
                     now = get_aware_utc_now()
@@ -88,7 +88,7 @@ class OverrideManager:
                     evt, end_time = self.interval_events[pat]
                     patterns[pat] = format_timestamp(end_time)
 
-            self.parent.vip.config.set("override_patterns", dumps(patterns))
+            self.parent.vip.config.set("_override_patterns", dumps(patterns))
 
     def set_off(self, pattern):
         """Turn off override condition on all devices matching the pattern. It removes the pattern from the override
@@ -116,7 +116,7 @@ class OverrideManager:
                     evt, end_time = self.interval_events[pat]
                     patterns[pat] = format_timestamp(end_time)
 
-            self.parent.vip.config.set("override_patterns", dumps(patterns))
+            self.parent.vip.config.set("_override_patterns", dumps(patterns))
         else:
             _log.error("Override Pattern did not match!")
             raise OverrideError(
@@ -134,7 +134,7 @@ class OverrideManager:
         self.interval_events.clear()
         self.devices.clear()
         self.patterns.clear()
-        self.parent.vip.config.set("override_patterns", {})
+        self.parent.vip.config.set("_override_patterns", {})
 
     def _update_override_interval(self, interval, pattern):
         """Schedules a new override event for the specified interval and pattern. If the pattern already exists and new

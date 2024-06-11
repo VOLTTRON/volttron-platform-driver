@@ -29,6 +29,7 @@ import sys
 
 from collections import defaultdict
 from datetime import datetime
+from pkgutil import iter_modules
 from pydantic import BaseModel, ValidationError
 from typing import Sequence, Set
 from weakref import WeakValueDictionary
@@ -41,6 +42,7 @@ from volttron.client.vip.agent.subsystems.rpc import RPC
 from volttron.driver.base.driver import BaseInterface, DriverAgent
 from volttron.driver.base.driver_locks import configure_publish_lock, setup_socket_lock
 from volttron.driver.base.utils import setup_publishes
+from volttron.driver import interfaces
 from volttron.utils import format_timestamp, get_aware_utc_now, load_config, setup_logging, vip_main
 from volttron.utils.jsonrpc import RemoteError
 
@@ -73,6 +75,7 @@ class PlatformDriverConfig(BaseModel):
     poll_scheduler_module_name: str = 'platform_driver.poll_scheduler'
     reservation_preempt_grace_time: float = 60.0
     reservation_publish_interval: float = 60.0
+    reservation_required_for_write: bool = False
     scalability_test: bool = False
     scalability_test_iterations: int = 3
 
@@ -369,53 +372,30 @@ class PlatformDriverAgent(Agent):
     # Query Backend
     ###############
 
-    # TODO: WIP Check this method. Does it work? Well? Is it necessary?
-    def find_working_tree(self, topic: str | Sequence[str] | Set[str] = None, regex: str = None, tag: str = None):
-        # Resolve tags if the tag query parameter is set:
-        tag_list = None
-        if tag:
-            try:
-                tag_list = self.vip.rpc.call('platform.tagging', 'get_topics_by_tags', tag)
-            except gevent.Timeout as e:
-                e.exception = f'Tagging Service timed out: {e.exception}'
-                raise
-
-        if isinstance(topic, list):
-            exact_matches = topic
-            topic = None
-        else:
-            exact_matches = []
-        exact_matches.extend(tag_list)
-        # Prune device tree and get nodes matching topic:
-        return self.equipment_tree.prune(topic, regex, exact_matches)
-
-    # TODO: WIP Check this method. Does it work? Well?  Is it necessary?
-    def find_points_in_equipment_tree(self, topic: str | Sequence[str] | Set[str] = None, regex: str = None, tag: str = None):
-        working_tree = self.find_working_tree(topic, regex, tag)
-        root_name = self.equipment_tree.root
-        # TODO: This won't work if topic is a list.
-        return working_tree.get_matches(f'{root_name}/{topic}' if topic else f'{root_name}')
-
-    # TODO: WIP Check this method. Does it work? Well? Is it necessary?
-    def find_nodes_in_equipment_tree(self, topic: str | Sequence[str] | Set[str] = None, regex: str = None, tag: str = None):
-        working_tree = self.find_working_tree(topic, regex, tag)
-        root_name = self.equipment_tree.root
-        # TODO: Find any nodes in the tree matching criteria, not just points. Return these.
-        return []
+    def resolve_tags(self, tags):
+        """ Resolve tags from tagging service. """
+        try:
+            tag_list = self.vip.rpc.call('platform.tagging', 'get_topics_by_tags', tags).get(timeout=5)
+            return tag_list if tag_list else []
+        except gevent.Timeout as e:
+            _log.warning(f'Tagging Service timed out: {e.exception}')
+            return []
 
     def build_query_plan(self, topic: str | Sequence[str] | Set[str] = None, regex: str = None, tag: str = None
                          ) -> dict[DriverAgent, set[PointNode]]:
         """ Find points to be queried and organize by remote."""
-        working_tree = self.find_working_tree(topic, regex, tag)
-        # Build remote: set of points dictionary.
+        exact_matches, topic = (topic, None) if isinstance(topic, list) else ([], topic)
+        if tag:
+            exact_matches.extend(self.resolve_tags(tag))
         query_plan = defaultdict(set)
-        for p in working_tree.points():
-            query_plan[p.get_remote(working_tree.identifier)].add(p)
+        for p in self.equipment_tree.find_points(topic, regex, tag):
+            query_plan[self.equipment_tree.get_remote(p.identifier)].add(p)
         return query_plan
 
     ###############
     # RPC Interface
     ###############
+    # TODO: semantic_get
 
     @RPC.export
     def get(self, topic: str | Sequence[str] | Set[str] = None, tag: str = None, regex: str = None) -> (dict, dict):
@@ -423,37 +403,52 @@ class PlatformDriverAgent(Agent):
         results = {}
         errors = {}
         # Find set of points to query and organize by remote:
-        _log.debug("########### BEFORE QUERY PLAN")
         query_plan = self.build_query_plan(topic, regex, tag)
-        _log.debug("############ AFTER QUERY PLAN")
         # Make query for selected points on each remote:
         for (remote, point_set) in query_plan.items():
-            print(f'For remote: {remote}, point_set is: {point_set}')
-            query_return_values, query_return_errors = remote.get_multiple_points([p.topic for p in point_set])
-            for topic, val in query_return_values.items():
-                self.equipment_tree.get_node(topic).last_value(val)
-            results.update(query_return_values)
-            errors.update(query_return_errors)
+            q_return_values, q_return_errors = remote.get_multiple_points([p.identifier for p in point_set])
+            _log.debug(f'GOT BACK FROM GET_MULTIPLE_POINTS WITH: {q_return_values}')
+            _log.debug(f'ERRORS FROM GET_MULTIPLE_POINTS: {q_return_errors}')
+            for topic, val in q_return_values.items():
+                node = self.equipment_tree.get_node(topic)
+                if node:
+                    node.last_value(val)
+            results.update(q_return_values)
+            errors.update(q_return_errors)
         return results, errors
 
     @RPC.export
     def set(self, value: any, topic: str | Sequence[str] | Set[str] = None, tag: str = None, regex: str = None,
             confirm_values: bool = False, map_points=False) -> (dict, dict):
-        # TODO: Implement set() following get() pattern.
-        # TODO: If map points is True, interpret value dictionary as point: value mapping.
-        pass
+        results = {}
+        errors = {}
+        # Find set of points to query and organize by remote:
+        query_plan = self.build_query_plan(topic, regex, tag)
+        # Set selected points on each remote:
+        for (remote, point_set) in query_plan.items():
+            # TODO: The DriverAgent isn't currently expecting full topics.
+            point_value_tuples = list(value.items()) if map_points else [(p.identifier, value) for p in point_set]
+            query_return_errors = remote.set_multiple_points(point_value_tuples)
+            errors.update(query_return_errors)
+            if confirm_values:
+                # TODO: Should results contain the values read back from the device, or Booleans for success?
+                results.update(remote.get_multiple_points([p.identifier for p in point_set]))
+        return results, errors
 
     @RPC.export
     def revert(self, topic: str | Sequence[str] | Set[str] = None, tag: str = None, regex: str = None,
               confirm_values: bool = False) -> dict:
-        # TODO: Implement revert() following get() pattern.
-        pass
+        query_plan = self.build_query_plan(topic, regex, tag)
+        # Set selected points on each remote:
+        for (remote, point_set) in query_plan.items():
+            # TODO: How to handle all/single/multiple reverts? Detect devices, and othewise use revert_point? Add revert_multiple?
+            pass
+        # TODO: What to return for this? The current methods return None.
 
     @RPC.export
-    def last(self, topic: str | Sequence[str] | Set[str] = None, tag: str = None, regex: str = None, value: bool = True,
-             updated: bool = True) -> dict:
-        # TODO: WIP last() should get points following get() pattern.
-        points = self.find_points_in_equipment_tree(topic, regex, tag)
+    def last(self, topic: str | Sequence[str] | Set[str] = None, tag: str = None, regex: str = None,
+             value: bool = True, updated: bool = True) -> dict:
+        points = self.equipment_tree.find_points(topic, regex, tag)
         if value:
             if updated:
                 return_dict = {p.topic: {'value': p.last_value, 'updated': p.last_updated} for p in points}
@@ -468,7 +463,7 @@ class PlatformDriverAgent(Agent):
     #-----------
     @RPC.export
     def start(self, topic: str | Sequence[str] | Set[str] = None, tag: str = None, regex: str = None) -> None:
-        points = self.find_nodes_in_equipment_tree(topic, regex, tag)
+        points = self.equipment_tree.find_points(topic, regex, tag)
         for p in points:
             if p.active:
                 return
@@ -481,7 +476,7 @@ class PlatformDriverAgent(Agent):
 
     @RPC.export
     def stop(self, topic: str | Sequence[str] | Set[str] = None, tag: str = None, regex: str = None) -> None:
-        points = self.find_nodes_in_equipment_tree(topic, regex, tag)
+        points = self.equipment_tree.find_points(topic, regex, tag)
         for p in points:
             if not p.active:
                 return
@@ -494,41 +489,44 @@ class PlatformDriverAgent(Agent):
 
     @RPC.export
     def enable(self, topic: str | Sequence[str] | Set[str] = None, tag: str = None, regex: str = None) -> None:
-        nodes = self.find_nodes_in_equipment_tree(topic, regex, tag)
+        nodes = self.equipment_tree.find_points(topic, regex, tag)
         for node in nodes:
             node.config['active'] = True
-            if not node.is_point():
+            if not node.is_point:
                 # TODO: Make sure this doesn't trigger UPDATE.
-                self.vip.config.set(node.topic, node.config)
+                self.vip.config.set(node.topic, node.config, trigger_callback=False)
             else:
-                # TODO: Find device parent, get registry from there? Or better to have path to registry already.
-                pass
+                device_node = self.equipment_tree.get_device_node(node.identifier)
+                node.config.update({'Active': True})
+                device_node.update_registry_row(node.config)
 
     @RPC.export
     def disable(self, topic: str | Sequence[str] | Set[str] = None, tag: str = None, regex: str = None) -> None:
-        nodes = self.find_nodes_in_equipment_tree(topic, regex, tag)
+        nodes = self.equipment_tree.find_points(topic, regex, tag)
         for node in nodes:
             node.config['active'] = False
-            if not node.is_point():
-                self.vip.config.set(node.topic, node.config)
+            if not node.is_point:
+                self.vip.config.set(node.topic, node.config, trigger_callback=False)
             else:
-                # TODO: Find device parent, get registry from there? Or better to have path to registry already.
-                pass
+                device_node = self.equipment_tree.get_device_node(node.identifier)
+                node.config['active'] = False
+                device_node.update_registry_row(node.config)
 
     @RPC.export
     def status(self, topic: str | Sequence[str] | Set[str] = None, tag: str = None, regex: str = None) -> dict:
         # TODO: Implement status()
+        nodes = self.equipment_tree.find_points(topic, regex, tag)
         pass
 
     @RPC.export
-    def add_node(self, parent_topic: str, node_topic: str, config: dict) -> dict|None:
-        # TODO: Implement add_node()
-        pass
+    def add_node(self, node_topic: str, config: dict, update_schedule: bool = True) -> dict|None:
+        self._configure_new_equipment(node_topic, 'NEW', contents=config, schedule_now=update_schedule)
+        # TODO: What should this return? If error_dict, how to get this?
 
     @RPC.export
     def remove_node(self, node_topic: str) -> dict|None:
-        # TODO: Implement remove_node()
-        pass
+        self.equipment_tree.remove_segment(node_topic)
+        # TODO: What should this return? If error_dict, how to get this?
 
     @RPC.export
     def add_interface(self, driver_name: str, local_path: str = None) -> dict|None:
@@ -536,9 +534,26 @@ class PlatformDriverAgent(Agent):
         pass
 
     @RPC.export
-    def remove_interface(self, driver_name: str) -> dict|None:
-        # TODO: Implement remove_interface()
-        pass
+    def list_interfaces(self) -> list[str]:
+        """Return list of all installed driver interfaces."""
+        return [i.name for i in iter_modules(interfaces.__path__)]
+
+    @RPC.export
+    def remove_interface(self, interface_name: str) -> dict | None:
+        interface_package = self._interface_package_from_short_name(interface_name)
+        subprocess.run([sys.executable, '-m', 'pip', 'uninstall', interface_package])
+        # TODO: What should this be returning?  If error_dict, how to get this?
+
+    @RPC.export
+    def list_topics(self, topic: str, tag: str = None, regex: str = None,
+                    active: bool = False, enable: bool = False) -> list[str]:
+        # TODO: Fix issue with topics coming back from Remote.
+        # TODO: Handle regex and tags.
+        # TODO: Handle active and enable (exclude non-active and exclude non-enabled) flags.
+        topic = topic.strip('/') if topic and topic.startswith(self.equipment_tree.root) else self.equipment_tree.root
+        parent = topic if self.equipment_tree.get_node(topic) else topic.rsplit('/', 1)[0]
+        children = [c.identifier for c in self.equipment_tree.children(parent)]
+        return children
 
     #-------------
     # Reservations
@@ -656,13 +671,13 @@ class PlatformDriverAgent(Agent):
             # DEPRECATED: Only allows topic to be None to permit use of old-actuator-style keyword argument "topic".
             raise TypeError('Argument "path" is required.')
 
-        path, point_name = self._split_topic(path, point_name)
-        node = self.equipment_tree.get_node(self._equipment_id(path, point_name))
+        point_name = self._equipment_id(path, point_name)
+        node = self.equipment_tree.get_node(point_name)
         if not node:
-            raise ValueError(f'No equipment found for topic: {"/".join([path, point_name])}')
+            raise ValueError(f'No equipment found for topic: {point_name}')
         remote = node.get_remote(self.equipment_tree)
         if not remote:
-            raise ValueError(f'No remote found for topic: {"/".join([path, point_name])}')
+            raise ValueError(f'No remote found for topic: {point_name}')
         return remote.get_point(point_name, **kwargs)
 
     @RPC.export
@@ -703,14 +718,14 @@ class PlatformDriverAgent(Agent):
             path, point_name = (point_name, args[0]) if len(args) >= 1 else point_name, None
         point_name = point_name if point_name else kwargs.get('point', None)
 
-        path, point_name = self._split_topic(path, point_name)
+        point_name = self._equipment_id(path, point_name)
         node = self.equipment_tree.get_node(self._equipment_id(path, point_name))
         if not node:
-            raise ValueError(f'No equipment found for topic: {"/".join([path, point_name])}')
+            raise ValueError(f'No equipment found for topic: {point_name}')
         self.equipment_tree.raise_on_locks(node, sender)
         remote = node.get_remote(self.equipment_tree.identifier)
         if not remote:
-            raise ValueError(f'No remote found for topic: {"/".join([path, point_name])}')
+            raise ValueError(f'No remote found for topic: {point_name}')
         result = remote.set_point(point_name, value, **kwargs)
         headers = self._get_headers(sender)
         self._push_result_topic_pair(WRITE_ATTEMPT_PREFIX, topic, headers, value)
@@ -816,6 +831,8 @@ class PlatformDriverAgent(Agent):
 
         Sends heartbeat to all devices
         """
+        # TODO: Make sure this is being called with the full topic.
+        # TODO: Should this still be exposed if the actuator agent no longer needs to send to this?
         _log.debug("sending heartbeat")
         for device in self.remotes.values():
             device.heart_beat()
@@ -849,10 +866,10 @@ class PlatformDriverAgent(Agent):
                        ' Please consider converting code to use revert() method.')
             path, point_name = point_name, None
 
-        path, point_name = self._split_topic(path, point_name)
+        point_name = self._equipment_id(path, point_name)
         node = self.equipment_tree.get_node(self._equipment_id(path, point_name))
         if not node:
-            raise ValueError(f'No equipment found for topic: {"/".join([path, point_name])}')
+            raise ValueError(f'No equipment found for topic: {point_name}')
         self.equipment_tree.raise_on_locks(node, sender)
         remote = node.get_remote(self.equipment_tree.identifier)
         remote.revert_point(point_name, **kwargs)
@@ -1060,18 +1077,17 @@ class PlatformDriverAgent(Agent):
         with the same header as the request.
         """
         topic = self._equipment_id(topic.replace(REVERT_POINT_TOPIC + '/', '', 1), None)
-        _path, point = self._split_topic(topic, None)
         headers = self._get_headers(sender)
 
         try:
             node = self.equipment_tree.get_node(topic)
             self.equipment_tree.raise_on_locks(node, sender)
             remote = node.get_remote(self.equipment_tree.identifier)
-            remote.revert_point(point)
+            remote.revert_point(topic)
 
             self._push_result_topic_pair(REVERT_POINT_RESPONSE_PREFIX, topic, headers, None)
         except Exception as ex:
-            self._handle_error(ex, point, headers)
+            self._handle_error(ex, topic, headers)
 
     def handle_revert_device(self, _, sender: str, __, topic: str, ___, ____):
         """
@@ -1221,14 +1237,6 @@ class PlatformDriverAgent(Agent):
     # Helper Methods
     ################
 
-    def _split_topic(self, topic: str, point: str = None) -> (str, str):
-        """Convert actuator-style optional point names to (path, point) pair."""
-        topic = topic.strip('/')
-        if not topic.startswith(self.equipment_tree.root):
-            topic = '/'.join([self.equipment_tree.root, topic])
-        path, point_name = (topic, point) if point is not None else topic.rsplit('/', 1)
-        return path, point_name
-
     def _equipment_id(self, path: str, point: str = None) -> str:
         """Convert (path, point) pair to full devices/.../point format."""
         path = path.strip('/')
@@ -1248,10 +1256,6 @@ class PlatformDriverAgent(Agent):
         if type is not None:
             headers['type'] = action_type
         return headers
-
-    def _push_result_topic_pair(self, prefix: str, point: str, headers: dict, value: any):
-        topic = normtopic('/'.join([prefix, point]))
-        self.vip.pubsub.publish('pubsub', topic, headers, message=value)
 
     def _handle_error(self, ex: BaseException, point: str, headers: dict):
         if isinstance(ex, RemoteError):
@@ -1276,6 +1280,25 @@ class PlatformDriverAgent(Agent):
         }
         self.vip.pubsub.publish('pubsub', RESERVATION_RESULT_TOPIC, headers=headers, message=results)
         return results
+
+    @staticmethod
+    def _interface_package_from_short_name(interface_name):
+        if interface_name.startswith('volttron-lib-') and interface_name.endswith('-driver'):
+            return interface_name
+        else:
+            return f'volttron-lib-{interface_name}-driver'
+
+    def _push_result_topic_pair(self, prefix: str, point: str, headers: dict, value: any):
+        topic = normtopic('/'.join([prefix, point]))
+        self.vip.pubsub.publish('pubsub', topic, headers, message=value)
+
+    def _split_topic(self, topic: str, point: str = None) -> (str, str):
+        """Convert actuator-style optional point names to (path, point) pair."""
+        topic = topic.strip('/')
+        if not topic.startswith(self.equipment_tree.root):
+            topic = '/'.join([self.equipment_tree.root, topic])
+        path, point_name = (topic, point) if point is not None else topic.rsplit('/', 1)
+        return path, point_name
 
 
 def main():
