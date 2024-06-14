@@ -6,7 +6,7 @@ from platform_driver.agent import PlatformDriverAgent
 from platform_driver.reservations import ReservationManager
 from pickle import dumps
 from base64 import b64encode
-from datetime import datetime
+from datetime import datetime, timedelta
 
 class TestNewTask:
     sender = "test.agent"
@@ -36,10 +36,15 @@ class TestNewTask:
         result = setup.new_task(sender=None, task_id=self.task_id, priority="HIGH", requests=self.requests)
         assert result.info_string == 'MISSING_AGENT_ID' and not result.success
     def test_invalid_task_id(self, setup):
+        """ Tests task request with missing task id, empty task id, and int task id"""
+
         result = setup.new_task(self.sender, task_id=None, priority="HIGH", requests=self.requests)
         assert result.info_string == 'MISSING_TASK_ID' and not result.success
 
         result = setup.new_task(self.sender, task_id="", priority="HIGH", requests=self.requests)
+        assert result.info_string == 'MALFORMED_REQUEST: TypeError: taskid must be a nonempty string' and not result.success
+
+        result = setup.new_task(self.sender, task_id=1234, priority="HIGH", requests=self.requests)
         assert result.info_string == 'MALFORMED_REQUEST: TypeError: taskid must be a nonempty string' and not result.success
     def test_requests_malformed(self, setup):
         result = setup.new_task(self.sender, self.task_id, priority="HIGH", requests=[])
