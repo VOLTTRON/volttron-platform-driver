@@ -277,6 +277,70 @@ class TestSetPoint:
         # TODO this should be the same as the test above it but for some reason its not.
         PDA._equipment_id.assert_called_with(("device/topic", "SampleWritableFloat"), None)
 
+class TestHandleSet:
+    sender = "test.agent"
+    topic = "devices/actuators/set/device1/SampleWritableFloat1"
+    message = 0.2
+
+    @pytest.fixture
+    def PDA(self):
+        PDA = PlatformDriverAgent()
+
+        PDA.vip = MagicMock()
+        PDA.vip.rpc.context = MagicMock()
+        PDA.vip.rpc.context.vip_message.peer = self.sender
+
+        PDA._equipment_id = Mock(return_value="processed_point_name")
+
+        # Mock 'equipment_tree.get_node'
+        node_mock = MagicMock()
+        PDA.equipment_tree = MagicMock()
+        PDA.equipment_tree.get_node = Mock(return_value=node_mock)
+
+        PDA._get_headers = Mock(return_value={})
+        PDA._push_result_topic_pair = Mock()
+
+        PDA.set_point = Mock()
+
+        PDA._push_result_topic_pair = Mock()
+        PDA.get_point = Mock()
+        return PDA
+    def test_handle_set_calls_set_point_with_correct_parameters(self, PDA):
+        """Test handle_set calls set_point with correct parameters"""
+        PDA.handle_set(None, self.sender, None, self.topic, None, self.message)
+        PDA.set_point.assert_called_with("device1/SampleWritableFloat1", None, self.message)
+
+class TestHandleGet:
+    sender = "test.agent"
+    topic = "devices/actuators/get/device1/SampleWritableFloat1"
+
+    @pytest.fixture
+    def PDA(self):
+        PDA = PlatformDriverAgent()
+
+        # Mock 'vip' components
+        PDA.vip = MagicMock()
+        PDA.vip.rpc.context = MagicMock()
+        PDA.vip.rpc.context.vip_message.peer = self.sender
+
+        PDA._equipment_id = Mock(return_value="processed_point_name")
+
+        # Mock 'equipment_tree.get_node'
+        node_mock = MagicMock()
+        PDA.equipment_tree = MagicMock()
+        PDA.equipment_tree.get_node = Mock(return_value=node_mock)
+
+        PDA._get_headers = Mock(return_value={})
+        PDA._push_result_topic_pair = Mock()
+
+        PDA.get_point = Mock()
+
+        return PDA
+    def test_handle_get_calls_get_point_with_correct_parameters(self, PDA):
+        """Test handle_get calls get_point with correct parameters."""
+        PDA.handle_get(None, self.sender, None, self.topic, None, None)
+        PDA.get_point.assert_called_with("device1/SampleWritableFloat1")
+
 class TestGetPoint:
     sender = "test.agent"
     path = "devices/device1"
@@ -420,7 +484,6 @@ class TestSaveState:
         manager._log = logger
 
         return manager
-
     def test_save_state_set_called_once(self, reservation_manager):
         expected_data = b64encode(dumps(reservation_manager.tasks)).decode("utf-8")
 
