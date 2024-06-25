@@ -1,12 +1,14 @@
 import pickle
 import pytest
 
-from unittest.mock import Mock, MagicMock
+from mock import Mock, MagicMock
 from platform_driver.agent import PlatformDriverAgent
 from platform_driver.reservations import ReservationManager
 from pickle import dumps
 from base64 import b64encode
 from datetime import datetime, timedelta
+from volttrontesting import TestServer
+from volttron.client import Agent
 
 class TestNewTask:
     sender = "test.agent"
@@ -138,28 +140,142 @@ class TestNewTask:
         result = setup.cancel_task(sender=self.sender, task_id="unexistent_task_id")
         assert result.info_string == 'TASK_ID_DOES_NOT_EXIST'
 
-    def test_get_point(self, PDA):
-        PDA = PlatformDriverAgent()
+    def test_get_value_success(self, PDA):
+        # TODO again, not sure if this is really even worth keeping. probably remove. does not really test anything.
+        """
+        Tests that get_point can retrieve points from a remote node.
+        """
+        # Create a dictionary to simulate device state
+        device_state = {'devices/device1/point1': 20.5, 'devices/device1/point2': 30.5}
+        mock_remote = Mock()
 
-        # Mock the remote object and its get_point method
-        mock_remote = MagicMock()
-        mock_remote.get_point.return_value = 20.5
+        # set up the get_point method to return values from the device_state dictionary
+        def mock_get_point(point_name):
+            if point_name in device_state:
+                return device_state[point_name]
+            else:
+                raise ValueError(f'Point not found: {point_name}')
 
-        # Mock the device node
-        mock_node = MagicMock()
+        # call our fake loop method instead of remote.get_point
+        mock_remote.get_point.side_effect = mock_get_point
+
+        # create a mock object to simulate a node in the equipment_tree
+        mock_node = Mock()
         mock_node.get_remote.return_value = mock_remote
 
-        # Mock the _equipment_id method
-        PDA._equipment_id = MagicMock()
-        PDA._equipment_id.return_value = 'fakedriver1/SampleWritableFloat1'
+        # Replace the get_node method of the equipment_tree with a MagicMock
+        PDA.equipment_tree.get_node = MagicMock(return_value=mock_node)
 
-        # Mock the get_node method
-        PDA.equipment_tree.get_node = MagicMock()
-        PDA.equipment_tree.get_node.return_value = mock_node
-
-        result = PDA.get_point('fakedriver1', 'SampleWritableFloat1')
-
+        result = PDA.get_point('device1', 'point1')
         assert result == 20.5
+    def test_get_error_invalid_point_get_node_non_existent_point(self, PDA):
+        """
+        Tests that get_point can retrieve points from a remote node.
+        """
+        # Create a dictionary to simulate device state
+        device_state = {'devices/device1/point1': 20.5, 'devices/device1/point2': 30.5}
+
+        # Create a mock object to simulate the remote interface
+        mock_remote = Mock()
+
+        # create a mock object to simulate a node in the equipment_tree
+        mock_node = Mock()
+        mock_node.get_remote.return_value = mock_remote
+
+        # Replace the get_node method of the equipment_tree with a MagicMock
+        PDA.equipment_tree.get_node = MagicMock(return_value=None)
+
+        with pytest.raises(ValueError) as excinfo:
+            PDA.get_point('device1', 'non_existent_point')
+        assert str(excinfo.value) == 'No equipment found for topic: devices/device1/non_existent_point'
+
+    def test_handle_get(self, PDA):
+        """Tests if handle_get correctly publishes the point it receives from get_point"""
+        ts = TestServer()
+        ts.connect_agent(PDA)
+
+        # Mock the get_point method to return 20.5
+        PDA.get_point = MagicMock(return_value=20.5)
+
+        # Subscribe to the value response topic
+        subscriber = ts.subscribe('devices/actuators/value/device1/point12')
+
+        # Call the function you're testing with a valid point name
+        PDA.handle_get(None, 'test_sender', None, 'devices/actuators/get/device1/point12', None, None)
+
+        # Check that a message was published to the value response topic with the expected value
+        messages = subscriber.received_messages()
+        assert messages[0].message == 20.5
+
+class TestSetPoint:
+    sender = "test.agent"
+    path = "devices/device1"
+    point_name = "SampleWritableFloat1"
+    value = 0.2
+
+    @pytest.fixture
+    def PDA(self):
+        PDA = PlatformDriverAgent()
+
+        # Mock 'vip' components
+        PDA.vip = MagicMock()
+        PDA.vip.rpc.context = MagicMock()
+        PDA.vip.rpc.context.vip_message.peer = self.sender
+
+        # Mock _equipment_id
+        PDA._equipment_id = Mock(return_value="processed_point_name")
+
+        # Mock 'equipment_tree.get_node'
+        node_mock = MagicMock()
+        PDA.equipment_tree = MagicMock()
+        PDA.equipment_tree.get_node = Mock(return_value=node_mock)
+
+        # Mock other methods called in set_point
+        node_mock.get_remote = Mock(return_value=Mock())
+        PDA.equipment_tree.raise_on_locks = Mock()
+        PDA._get_headers = Mock(return_value={})
+        PDA._push_result_topic_pair = Mock()
+
+        return PDA
+
+    def test_set_point_calls_equipment_id_with_correct_parameters(self, PDA):
+        """Test set_point calls equipment_id method with correct parameters."""
+        PDA.set_point(path = 'device/topic', point_name = 'SampleWritableFloat', value = 42, kwargs = {})
+        # Assert that self._equipment_id was called with the correct arguments
+        PDA._equipment_id.assert_called_with("device/topic", "SampleWritableFloat")
+    def test_set_point_with_topic_kwarg(self, PDA):
+        """Test handling of 'topic' as keyword arg"""
+        kwargs = {'topic': 'device/topic'}
+        PDA.set_point(path = 'ignored_path', point_name = None, value = 42, **kwargs)
+        PDA._equipment_id.assert_called_with('device/topic', None)
+    def test_set_point_with_point_kwarg(self, PDA):
+        """ Test handling of 'point' keyword arg """
+        kwargs = {'point': 'SampleWritableFloat'}
+        PDA.set_point(path = 'device/topic', point_name = None, value = 42, **kwargs)
+        PDA._equipment_id.assert_called_with('device/topic', 'SampleWritableFloat')
+    def test_set_point_with_combined_path_and_empty_point(self, PDA):
+        """Test handling of path containing the point name and point_name is empty"""
+        # TODO is this expected? to call it with None? it does not use the path with the point name when point name is none?
+        kwargs = {}
+        PDA.set_point(path = 'device/topic/SampleWritableFloat', point_name = None, value = 42, **kwargs)
+        PDA._equipment_id.assert_called_with("device/topic/SampleWritableFloat", None)
+
+    def test_set_point_raises_error_for_invalid_node(self, PDA):
+        # Mock get_node to return None
+        PDA.equipment_tree.get_node.return_value = None
+        kwargs = {}
+
+        # Call the set_point function and check for ValueError
+        with pytest.raises(ValueError, match="No equipment found for topic: processed_point_name"):
+            PDA.set_point(path = 'device/topic', point_name = 'SampleWritableFloat', value = 42, **kwargs)
+    def test_set_point_deprecated(self, PDA):
+        """Test old style actuator call"""
+        PDA.set_point("ilc.agnet", 'device/topic', 42, 'SampleWritableFloat', {})
+        # TODO shouldnt this work? its receiving old style params but adding none to the end...
+        # TODO as of now it is mostly working it seems.
+        # Assert that self._equipment_id was called with the correct arguments
+        # TODO this should be the same as the test above it but for some reason its not.
+        PDA._equipment_id.assert_called_with(("device/topic", "SampleWritableFloat"), None)
 
 class TestCancelTask:
     sender = "test.agent"
@@ -235,3 +351,6 @@ class TestSaveState:
         reservation_manager.save_state(self.now)
         # and after calling save_state
         assert reservation_manager.reservation_state_file == "_reservation_state"
+
+if __name__ == '__main__':
+    pytest.main()
