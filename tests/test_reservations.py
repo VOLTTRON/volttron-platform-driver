@@ -2,7 +2,7 @@ import pickle
 import pytest
 from mock import MagicMock, Mock
 from platform_driver.agent import PlatformDriverAgent, PlatformDriverConfigV1, PlatformDriverConfig
-from platform_driver.reservations import ReservationManager
+from platform_driver.reservations import ReservationManager, Task, TimeSlice
 from pickle import dumps
 from base64 import b64encode
 from datetime import datetime, timedelta
@@ -203,6 +203,78 @@ class TestSaveState:
         reservation_manager.save_state(self.now)
         # and after calling save_state
         assert reservation_manager.reservation_state_file == "_reservation_state"
+
+class TestPopulateReservation:
+    requests = [
+        ["device1", datetime(2022, 1, 1, 12, 0), datetime(2022, 1, 1, 13, 0)],
+        ["device2", datetime(2022, 1, 1, 14, 0), datetime(2022, 1, 1, 15, 0)]
+    ]
+    @pytest.fixture
+    def task(self):
+        # Create a Task instance. Assuming the constructor accepts `agent_id`, `priority`, and `requests`.
+        return Task(agent_id="test_agent", priority="HIGH", requests=[])
+
+    def test_populate_reservation_with_valid_inputs(self, task):
+        task.populate_reservation(self.requests)
+        assert "device1" in task.devices
+        assert len(task.devices["device1"].time_slots) == 1
+        assert task.time_slice.start == datetime(2022, 1, 1, 12, 0)
+        assert task.time_slice.end == datetime(2022, 1, 1, 15, 0)
+
+    def test_populate_reservation_device_not_string(self, task):
+        """ Tests calling populate reservation with device as non string"""
+        requests = [
+            # device is a bool instead of a true
+            [True, datetime(2022, 1, 1, 12, 0), datetime(2022, 1, 1, 13, 0)],
+            ["device2", datetime(2022, 1, 1, 14, 0), datetime(2022, 1, 1, 15, 0)]
+        ]
+        with pytest.raises(ValueError, match="Device not string."):
+            task.populate_reservation(requests)
+class TestTaskMakeCurrent:
+    @pytest.fixture
+    def task(self):
+        # Create a Task instance with mock reservations and a set time slice.
+        t = Task(agent_id="test_agent", priority="HIGH", requests=[])
+        # Mocking device reservations within the task
+        t.devices = {
+            'device1': MagicMock(),
+            'device2': MagicMock()
+        }
+        # our task is active starting NOW for 1 hour
+        start_time = datetime.now()
+        end_time = datetime.now() + timedelta(hours=1)
+        t.time_slice = TimeSlice(start_time, end_time)
+        return t
+
+    def test_task_already_finished(self, task):
+        """set task state to finished, which clears devices, then we check that task.devices is empty"""
+        task.state = Task.STATE_FINISHED
+        task.make_current(datetime.now())
+        assert not task.devices, "Devices should be cleared when the task is finished."
+    def test_remove_finished_reservations(self, task):
+        """tests automatic removal of a device when task is finished and keeping of a non finished device"""
+        now = datetime.now()
+        # Set one reservation to be finished
+        task.devices['device1'].finished.return_value = True
+        task.devices['device2'].finished.return_value = False
+        task.make_current(now)
+        assert 'device1' not in task.devices
+        assert 'device2' in task.devices
+    def test_state_transition_to_pre_run(self, task):
+        """Tests calling make current with a time before the task is set to start"""
+        past_time = datetime.now() - timedelta(hours=1) # one hour before task starts
+        task.make_current(past_time)
+        assert task.state == Task.STATE_PRE_RUN
+    def test_state_transition_running(self, task):
+        """Tests calling make current 30 minutes after it has started """
+        within_time = datetime.now() + timedelta(minutes=30) # 30 minutes after task has started
+        task.make_current(within_time)
+        assert task.state == Task.STATE_RUNNING
+    def test_state_transition_finished(self, task):
+        """Tets calling make current with a time after the task is finished """
+        past_time = datetime.now() + timedelta(hours=2) # 1 hr after task was set to end
+        task.make_current(past_time)
+        assert task.state == Task.STATE_FINISHED
 
 if __name__ == '__main__':
     pytest.main()
