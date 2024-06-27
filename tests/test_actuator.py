@@ -9,6 +9,7 @@ from base64 import b64encode
 from datetime import datetime, timedelta
 from volttrontesting import TestServer
 from volttron.client import Agent
+from pydantic import ValidationError
 
 class TestNewTask:
     sender = "test.agent"
@@ -501,6 +502,48 @@ class TestSaveState:
         reservation_manager.save_state(self.now)
         # and after calling save_state
         assert reservation_manager.reservation_state_file == "_reservation_state"
+class TestLoadVersionedConfig:
+    @pytest.fixture
+    def PDA(self):
+        PDA = PlatformDriverAgent()
+        PDA.core = Mock()
+        PDA.vip = Mock()
+        return PDA
+    def test_load_empty_config(self, PDA):
+        """Test loading an empty config."""
+        config = {}
+        result = PDA._load_versioned_config(config)
+        assert result.config_version == 1
+    def test_loading_based_on_version(self, PDA):
+        """Tests loading a config based on version."""
+        # Load v1 this also tests using a version less than the current version
+        config_v1 = {'config_version': 1, 'publish_depth_first_all': True}
+        result = PDA._load_versioned_config(config_v1)
+        assert result.publish_depth_first_all == True
+        assert result.config_version == 1
+
+        # Load v2
+        config_v2 = {'config_version': 2, 'publish_depth_first_any': True}
+        result_v2 = PDA._load_versioned_config(config_v2)
+        assert result_v2.config_version == 2
+        assert result_v2.publish_depth_first_any == True
+    def test_deprecation_warning_for_old_config_versions(self, PDA, caplog):
+        config_old_version = {'config_version': 1}
+        result = PDA._load_versioned_config(config_old_version)
+        assert "Deprecation Warning" in caplog.text
+
+    # def test_load_invalid_config(self, PDA, caplog):
+        # """Test that an invalid config logs a warning and raises a ValidationError."""
+        # # TODO catch type error and validation error
+        # config = {'config_version': "two", 'invalid_field': "someting"}
+        #
+        # # Expecting a ValidationError to be raised
+        # with pytest.raises(ValueError):
+        #     PDA._load_versioned_config(config)
+        #
+        # # Expecting a specific warning message in the logs
+        # expected_warning = "Validation of platform driver configuration file failed."
+        # assert expected_warning in caplog.text, "Expected warning message not found in log"
 
 if __name__ == '__main__':
     pytest.main()
