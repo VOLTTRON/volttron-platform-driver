@@ -691,6 +691,7 @@ class PlatformDriverAgent(Agent):
                       format <device topic>/<point name>
                       Only the <device topic> if point is specified.
         :param value: Value to set point to.
+        :param value: Value to set point to.
         :param point_name: Point on the device.
         :param kwargs: Any driver specific parameters
         :type path: str
@@ -719,7 +720,7 @@ class PlatformDriverAgent(Agent):
         point_name = point_name if point_name else kwargs.get('point', None)
 
         point_name = self._equipment_id(path, point_name)
-        node = self.equipment_tree.get_node(self._equipment_id(path, point_name))
+        node = self.equipment_tree.get_node(point_name)
         if not node:
             raise ValueError(f'No equipment found for topic: {point_name}')
         self.equipment_tree.raise_on_locks(node, sender)
