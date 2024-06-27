@@ -185,7 +185,7 @@ class PlatformDriverAgent(Agent):
                                          if self.config.scalability_test else None)
             except ValueError as e:
                 _log.error(
-                    "ERROR PROCESSING STARTUP CRITICAL CONFIGURATION SETTINGS: {}".format(e))
+                    f"ERROR PROCESSING STARTUP CRITICAL CONFIGURATION SETTINGS: {e}")
                 _log.error("Platform driver SHUTTING DOWN")
                 sys.exit(1)
 
@@ -690,7 +690,6 @@ class PlatformDriverAgent(Agent):
         :param path: The topic of the point to set in the
                       format <device topic>/<point name>
                       Only the <device topic> if point is specified.
-        :param value: Value to set point to.
         :param value: Value to set point to.
         :param point_name: Point on the device.
         :param kwargs: Any driver specific parameters
