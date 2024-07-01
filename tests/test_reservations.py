@@ -383,5 +383,51 @@ class TestPreempt:
         assert task.time_slice.end == now + timedelta(minutes=30)
 
 
+class TestGetNextEventTime:
+    @pytest.fixture
+    def task(self):
+        task = Task(agent_id="test_agent", priority="HIGH", requests=[])
+        return task
+    def test_no_reservations(self, task):
+        """Test get_next_event_time returns None when there are no reservations."""
+        now = datetime.now()
+        assert task.get_next_event_time(now) is None
+    def test_single_reservation(self, task):
+        """Test with a single reservation."""
+        now = datetime.now()
+        reservation = Mock()
+        # our reservation object is created from now to 10 mins from now.
+        reservation.get_next_event_time.return_value = now + timedelta(minutes=10)
+        task.devices['device1'] = reservation # assign our new reservation to device1
+
+        assert task.get_next_event_time(now) == now + timedelta(minutes=10)
+        assert 'device1' in task.devices
+    def test_multiple_reservations(self, task):
+        """ Test with multiple reservations which should return the earliest event time"""
+        now = datetime.now()
+        reservation1 = Mock()
+        reservation1.get_next_event_time.return_value = now + timedelta(minutes=10)
+        reservation2 = Mock()
+        reservation2.get_next_event_time.return_value = now + timedelta(minutes=20)
+
+        task.devices['device1'] = reservation1
+        task.devices['device2'] = reservation2
+
+        assert task.get_next_event_time(now) == now + timedelta(minutes=10)
+    def test_mixed_null_and_valid_times(self, task):
+        """Test with mixed null and valid next event times."""
+        now = datetime.now()
+        reservation1 = Mock()
+        # one reservation object returns none
+        reservation1.get_next_event_time.return_value = None
+        reservation2 = Mock()
+        reservation2.get_next_event_time.return_value = now + timedelta(minutes=20)
+
+        task.devices['device1'] = reservation1
+        task.devices['device2'] = reservation2
+
+        assert task.get_next_event_time(now) == now + timedelta(minutes=20)
+
+
 if __name__ == '__main__':
     pytest.main()
