@@ -2,7 +2,7 @@ import pickle
 import pytest
 from mock import MagicMock, Mock
 from platform_driver.agent import PlatformDriverAgent, PlatformDriverConfigV1, PlatformDriverConfig
-from platform_driver.reservations import ReservationManager, Task, TimeSlice
+from platform_driver.reservations import ReservationManager, Task, TimeSlice, Reservation
 from pickle import dumps
 from base64 import b64encode
 from datetime import datetime, timedelta
@@ -271,10 +271,117 @@ class TestTaskMakeCurrent:
         task.make_current(within_time)
         assert task.state == Task.STATE_RUNNING
     def test_state_transition_finished(self, task):
-        """Tets calling make current with a time after the task is finished """
+        """Tests calling make current with a time after the task is finished """
         past_time = datetime.now() + timedelta(hours=2) # 1 hr after task was set to end
         task.make_current(past_time)
         assert task.state == Task.STATE_FINISHED
+
+class TestCheckCanPreemptOther:
+    @pytest.fixture
+    def high_priority_task(self):
+        # Create a high priority task object in PRE_RUN state for basic setup.
+        return Task(agent_id="agent1", priority='HIGH', requests=[])
+
+    @pytest.fixture
+    def low_priority_task(self):
+        # Create a low priority task.
+        return Task(agent_id="agent2", priority='LOW', requests=[])
+
+    @pytest.fixture
+    def preemptable_task(self):
+        # Create a task that is running but is preemptable.
+        task = Task(agent_id="agent3", priority='LOW_PREEMPT', requests=[])
+        task.state = Task.STATE_RUNNING
+        return task
+
+    @pytest.fixture
+    def non_preemptable_high_priority_task(self):
+        # Create a high priority task that is currently running.
+        task = Task(agent_id="agent4", priority='HIGH', requests=[])
+        task.state = Task.STATE_RUNNING
+        return task
+
+    def test_preemption_high_vs_high(self, high_priority_task, non_preemptable_high_priority_task):
+        """tests a high priority task trying to preept another high priority task"""
+        result = high_priority_task.check_can_preempt_other(non_preemptable_high_priority_task)
+        assert result == False, "High priority cannot preempt another high priority task."
+
+    def test_preemption_low_priority(self, low_priority_task, non_preemptable_high_priority_task):
+        """Tests a low priority task trying to preempt a high priority task"""
+        result = low_priority_task.check_can_preempt_other(non_preemptable_high_priority_task)
+        assert result== False, "Low priority task cannot preempt any task."
+
+    def test_preemption_running_preemptable(self, high_priority_task, preemptable_task):
+        """ tests a high priority task trying to preempt a preemptable low priority running task"""
+        result = high_priority_task.check_can_preempt_other(preemptable_task)
+        assert result == True, "High priority task should be able to preempt a low preemptable running task."
+
+    def test_preemption_of_low_priority_pre_run_task(self, high_priority_task, low_priority_task):
+        """Tests a high priorty task trying to preempt a low priority pre run task"""
+        low_priority_task.state = Task.STATE_PRE_RUN
+        result = high_priority_task.check_can_preempt_other(low_priority_task)
+        assert result == True, "High priority should preempt low priority in PRE_RUN state."
+
+    def test_preemption_of_low_priority_finished_task(self, high_priority_task, low_priority_task):
+        """Tests a high priorty task trying to preempt a low priority finished task"""
+        low_priority_task.state = Task.STATE_FINISHED
+        result = high_priority_task.check_can_preempt_other(low_priority_task)
+        assert result == True, "High priority should preempt low priority in FINISHED state."
+
+class TestPreempt:
+    @pytest.fixture
+    def task(self):
+        requests = [
+            ["device1", datetime.now(), datetime.now() + timedelta(hours=1)]
+        ]
+        return Task(agent_id="test_agent", priority="HIGH", requests=requests)
+
+    @pytest.fixture
+    def reservation(self):
+        reservation = Reservation()
+        reservation.reserve_slot(TimeSlice(datetime.now(), datetime.now() + timedelta(hours=1)))
+        return reservation
+
+    def test_preempt_already_preempted(self, task):
+        """Tests if the task state is already preempted"""
+        task.state = Task.STATE_PREEMPTED
+        result = task.preempt(grace_time=timedelta(minutes=10), now=datetime.now())
+        assert result == True
+        assert task.state == Task.STATE_PREEMPTED
+
+    def test_preempt_finished(self, task):
+        """Tests if the task state is already finished"""
+        task.state = Task.STATE_FINISHED
+        result = task.preempt(grace_time=timedelta(minutes=10), now=datetime.now())
+        assert result == False
+
+    def test_preempt_active_time_slots(self, task, reservation):
+        """Tests running with tasks that qualify for preemption"""
+        task.devices['device1'] = reservation
+        now = datetime.now()
+        result = task.preempt(grace_time=timedelta(minutes=30), now=now)
+        assert result == True
+        assert task.state == Task.STATE_PREEMPTED # preempt method converted
+        assert task.time_slice.start == now
+        assert task.time_slice.end == now + timedelta(minutes=30)
+
+    def test_preempt_no_remaining_time_slots(self, task, reservation):
+        """ Set the current time after the end of the reservation"""
+        now = datetime.now() + timedelta(hours=2)
+        task.devices['device1'] = reservation
+        result = task.preempt(grace_time=timedelta(minutes=30), now=now)
+        assert result == False
+        assert task.state == Task.STATE_FINISHED
+
+    def test_grace_period_extension(self, task, reservation):
+        """Tests extedning time slot"""
+        task.devices['device1'] = reservation
+        now = datetime.now()
+        result = task.preempt(grace_time=timedelta(minutes=30), now=now)
+        assert result == True
+        assert task.time_slice.start == now
+        assert task.time_slice.end == now + timedelta(minutes=30)
+
 
 if __name__ == '__main__':
     pytest.main()
