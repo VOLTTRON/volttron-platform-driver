@@ -428,6 +428,39 @@ class TestGetNextEventTime:
 
         assert task.get_next_event_time(now) == now + timedelta(minutes=20)
 
+class TestCheckAvailability:
+    @pytest.fixture
+    def reservation(self):
+        return Reservation()
+    def test_empty_reservation_list(self, reservation):
+        """Tests that empty reservation list returns empty set"""
+        now = datetime.now()
+        time_slot = TimeSlice(now, now + timedelta(hours=1))
+        assert reservation.check_availability(time_slot) == set(), "Should return an empty set for no conflicts."
+
+    def test_single_overlap(self, reservation):
+        """ Tests that check availability correctly returns time slots affected by new overlapping times"""
+        start_time = datetime.now()
+        end_time = start_time + timedelta(hours=2)
+        existing_time_slot = TimeSlice(start_time, end_time)
+        reservation.time_slots.append(existing_time_slot)
+
+        # Overlapping time slot
+        overlap_start = start_time + timedelta(hours=1)  #starts one hour into the existing slot
+        overlap_end = overlap_start + timedelta(hours=1)  # Ends one hour later
+        new_time_slot = TimeSlice(overlap_start, overlap_end)
+
+        available_slots = reservation.check_availability(new_time_slot)
+
+        # check availability will return the time slots affected by the new time
+        assert available_slots == {existing_time_slot}, "Should detect the overlap with the existing time slot."
+
+    def test_no_overlap(self, reservation):
+        """Tests with no overlap"""
+        now = datetime.now()
+        reservation.time_slots.append(TimeSlice(now + timedelta(hours=1), now + timedelta(hours=2)))
+        time_slot = TimeSlice(now + timedelta(hours=3), now + timedelta(hours=4))
+        assert not reservation.check_availability(time_slot), "Should not detect any overlap."
 
 if __name__ == '__main__':
     pytest.main()
