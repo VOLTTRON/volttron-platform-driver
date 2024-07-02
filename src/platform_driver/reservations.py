@@ -268,8 +268,7 @@ class Reservation(object):
         self.make_current(now)
         if not self.time_slots:
             return None
-        _log.debug("in reservation get_next_event_time timeslots {} now {}".format(
-            self.time_slots[0], now))
+        _log.debug(f"in reservation get_next_event_time timeslots {self.time_slots[0]} now {now}")
         next_time = self.time_slots[0].end if self.time_slots[0].contains_include_start(
             now) else self.time_slots[0].start
         # Round to the next second to fix timer goofiness in agent timers.
@@ -279,6 +278,9 @@ class Reservation(object):
         return next_time
 
     def get_current_slot(self, now):
+        """
+        Determines if "now" falls within any scheduled time slots and returns the current active slot, or None if no slot is active
+        """
         self.make_current(now)
         if not self.time_slots:
             return None
