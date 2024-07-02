@@ -383,7 +383,7 @@ class TestPreempt:
         assert task.time_slice.end == now + timedelta(minutes=30)
 
 
-class TestGetNextEventTime:
+class TestTaskGetNextEventTime:
     @pytest.fixture
     def task(self):
         task = Task(agent_id="test_agent", priority="HIGH", requests=[])
@@ -461,6 +461,134 @@ class TestCheckAvailability:
         reservation.time_slots.append(TimeSlice(now + timedelta(hours=1), now + timedelta(hours=2)))
         time_slot = TimeSlice(now + timedelta(hours=3), now + timedelta(hours=4))
         assert not reservation.check_availability(time_slot), "Should not detect any overlap."
+
+class TestReservationMakeCurrent:
+    @pytest.fixture
+    def reservation(self):
+        return Reservation()
+    def test_make_current_no_time_slots(self, reservation):
+        """Test making calling with no time slots"""
+        now = datetime.now()
+        reservation.make_current(now)
+        assert len(reservation.time_slots) == 0, "No time slots should remain if none were added."
+
+    def test_make_current_future_time_slots_only(self, reservation):
+        """Test calling make_current with a future time slot which should remain unchanged."""
+        now = datetime.now()
+        future_time_slot = TimeSlice(start=now + timedelta(hours=1), end=now + timedelta(hours=2))
+        reservation.time_slots.append(future_time_slot) # add times to time_slots
+        reservation.make_current(now)
+        assert len(reservation.time_slots) == 1, "Future time slots should not be removed."
+
+    def test_make_current_past_time_slots_only(self, reservation):
+        """Test calling reservation make_current with past time slot which should be removed"""
+        now = datetime.now()
+        past_time_slot = TimeSlice(start=now - timedelta(hours=2), end=now - timedelta(hours=1))
+        reservation.time_slots.append(past_time_slot)
+        reservation.make_current(now)
+        assert len(reservation.time_slots) == 0, "Past time slots should be removed."
+
+    def test_make_current_mixed_time_slots(self, reservation):
+        """Tests callimg make current with 1 old, and one future task"""
+        now = datetime.now()
+        past_time_slot = TimeSlice(start=now - timedelta(hours=2), end=now - timedelta(hours=1))
+        future_time_slot = TimeSlice(start=now + timedelta(hours=1), end=now + timedelta(hours=2))
+        reservation.time_slots.extend([past_time_slot, future_time_slot])
+        reservation.make_current(now)
+        # there should only be one time slot after running make current
+        # and that time slot should be the future time
+        assert len(reservation.time_slots) == 1 and reservation.time_slots[
+            0] == future_time_slot, "Only past time slots should be removed."
+
+class TestReservationGetNextEventTime:
+    @pytest.fixture
+    def reservation(self):
+        return Reservation()
+    def test_get_next_event_time_no_slots(self, reservation):
+        now = datetime.now()
+        assert reservation.get_next_event_time(now) is None, "Should return None when there are no time slots."
+
+    def test_get_next_event_time_future_slots(self, reservation):
+        now = datetime.now()
+        future_start = now + timedelta(hours=1)
+        future_end = now + timedelta(hours=2)
+        reservation.time_slots.append(TimeSlice(start=future_start, end=future_end))
+
+        # adjusting the expected time for rounding similar to get_next_event_time
+        expected_time = future_start.replace(microsecond=0) + timedelta(seconds=1)
+
+        assert reservation.get_next_event_time(now) == expected_time, \
+            "Should return the start of the next future slot after rounding to the next second."
+
+    def test_get_next_event_time_during_active_slot(self, reservation):
+        """Tests get_next_event_time returns the most recent end time, indicating the next even time"""
+        now = datetime.now()
+        active_start = now - timedelta(minutes=30)  # 30 minutes ago
+        active_end = now + timedelta(minutes=30)  # 30 minutes from now
+        reservation.time_slots.append(TimeSlice(start=active_start, end=active_end))
+
+        expected_time = active_end.replace(microsecond=0) + timedelta(
+            seconds=1)  # Adjusting for the rounding in the method
+        assert reservation.get_next_event_time(
+            now) == expected_time, "Should return the end of the current active slot."
+
+class TestReservationGetCurrentSlot:
+    @pytest.fixture
+    def reservation(self):
+        res = Reservation()
+        now = datetime.now()
+        res.time_slots.append(TimeSlice(start=now - timedelta(hours=1), end=now + timedelta(hours=1)))  # Active slot
+        res.time_slots.append(TimeSlice(start=now + timedelta(hours=2), end=now + timedelta(hours=3)))  # Future slot
+        return res
+
+    def test_get_current_slot_inside_slot(self, reservation):
+        """Tests getting a timeslot """
+        now = datetime.now()
+        current_slot = reservation.get_current_slot(now)
+        assert current_slot != None, "Should return a current time slot"
+        assert current_slot.start <= now, "Now should be after the start of the returned time slot."
+        assert now <= current_slot.end, "Now should be before the end of the returned time slot."
+
+    def test_get_current_slot_outside_slot(self, reservation):
+        """Tets trying to get current slot outside any current time slot"""
+        now = datetime.now() + timedelta(hours=4)  # Outside any defined slots
+        current_slot = reservation.get_current_slot(now)
+        assert current_slot == None, "Should return None when now is outside any slot."
+
+    def test_get_current_slot_no_slots(self):
+        """Calling with just reservation that has no slots added"""
+        reservation = Reservation()  # no slots added
+        now = datetime.now()
+        current_slot = reservation.get_current_slot(now)
+        assert current_slot == None, "Should return none when there are no time slots"
+
+class TestPruneToCurrent:
+    @pytest.fixture
+    def reservation(self):
+        res = Reservation()
+        now = datetime.now()
+        res.time_slots.append(TimeSlice(start=now - timedelta(hours=1), end=now + timedelta(hours=1)))  # Past to future
+        res.time_slots.append(TimeSlice(start=now + timedelta(hours=2), end=now + timedelta(hours=3)))  # Future slot
+        return res
+
+    def test_prune_to_current_no_active_slot(self, reservation):
+        """Test that all slots are cleared if no current slot is active."""
+        now = datetime.now() + timedelta(hours=4)  # Time beyond all slots
+        grace_time = timedelta(minutes=30)
+        reservation.prune_to_current(grace_time, now)
+
+        assert len(reservation.time_slots) == 0, "No slots should remain."
+
+    def test_prune_to_current_active_slot_extending_beyond_grace_period(self, reservation):
+        """Test that an active slot extending beyond the grace period is pruned correctly."""
+        now = datetime.now() + timedelta(minutes=10)  # 10 minutes from now
+        grace_time = timedelta(minutes=20) # 20 minutes from now
+        reservation.prune_to_current(grace_time, now)
+        expected_end_time = now + grace_time # should extend time
+        assert len(reservation.time_slots) == 1, "Only one slot should remain."
+        assert reservation.time_slots[0].end == expected_end_time, "Slot should end at the grace period end."
+
+
 
 if __name__ == '__main__':
     pytest.main()
