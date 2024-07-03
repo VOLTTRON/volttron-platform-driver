@@ -5,7 +5,8 @@ from platform_driver.agent import PlatformDriverAgent, PlatformDriverConfigV1, P
 from platform_driver.reservations import ReservationManager, Task, TimeSlice, Reservation
 from pickle import dumps
 from base64 import b64encode
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from volttron.utils import get_aware_utc_now
 from volttrontesting import TestServer
 from volttron.client import Agent
 from pydantic import ValidationError
@@ -588,6 +589,92 @@ class TestPruneToCurrent:
         assert len(reservation.time_slots) == 1, "Only one slot should remain."
         assert reservation.time_slots[0].end == expected_end_time, "Slot should end at the grace period end."
 
+class TestReservationGetConflicts:
+
+    @pytest.fixture
+    def reservation(self):
+        res = Reservation()
+        now = datetime.now()
+        # Setup predefined time slots
+        res.time_slots.append(TimeSlice(start=now, end=now + timedelta(hours=1)))
+        res.time_slots.append(TimeSlice(start=now + timedelta(hours=2), end=now + timedelta(hours=3)))
+        return res
+
+    def test_no_conflicts(self, reservation):
+        """Tests no conflicts returned when checking  """
+        other_reservation = Reservation()
+        other_reservation.time_slots.append(
+            TimeSlice(start=datetime.now() + timedelta(hours=4), end=datetime.now() + timedelta(hours=5)))
+        conflicts = reservation.get_conflicts(other_reservation)
+        assert len(conflicts) == 0, "There should be no conflicts."
+
+    def test_partial_conflicts(self, reservation):
+        """Tests partial conflicts returned"""
+        other_reservation = Reservation()
+        other_reservation.time_slots.append(
+            TimeSlice(start=datetime.now() + timedelta(hours=4), end=datetime.now() + timedelta(hours=5)))
+        other_reservation.time_slots.append(
+            TimeSlice(start=datetime.now() + timedelta(minutes=30), end=datetime.now() + timedelta(hours=1, minutes=30)))
+        conflicts = reservation.get_conflicts(other_reservation)
+        assert len(conflicts) == 1, "There should be one conflict."
+
+    def test_complete_conflicts(self, reservation):
+        """Tests conflicts with our fixture and appended times"""
+        other_reservation = Reservation()
+        other_reservation.time_slots.append(TimeSlice(start=datetime.now(), end=datetime.now() + timedelta(hours=1)))
+        other_reservation.time_slots.append(
+            TimeSlice(start=datetime.now() + timedelta(hours=2), end=datetime.now() + timedelta(hours=3)))
+        conflicts = reservation.get_conflicts(other_reservation)
+        assert len(conflicts) == 2, "There should be two conflicts."
+
+
+class TestReservationManagerUpdate:
+    @pytest.fixture
+    def setup(self):
+        parent = Mock()
+        parent.vip = Mock()
+        parent.vip.config.get = MagicMock(return_value=pickle.dumps({}))
+        parent.vip.config.set = MagicMock()
+        parent.config = Mock()
+        parent.config.reservation_publish_interval = 60
+        grace_time = 10
+
+        reservation_manager = ReservationManager(parent, grace_time)
+        reservation_manager._cleanup = MagicMock()
+        reservation_manager.save_state = MagicMock()
+        return reservation_manager
+
+    def test_update_adjusts_time_correctly(self, setup):
+        """Tests that the update method adjusts the event timing correctly and schedules the next event properly """
+        mock_now = get_aware_utc_now()
+        future_time = mock_now + timedelta(minutes=5)
+
+        setup.get_next_event_time = MagicMock(return_value=future_time)
+        setup.get_reservation_state = MagicMock(return_value={})
+        setup._get_adjusted_next_event_time = MagicMock(return_value=future_time)
+
+        setup.update(now=mock_now)
+
+        # assert the internal method calls
+        setup.get_reservation_state.assert_called_once_with(mock_now)
+        setup.get_next_event_time.assert_called_once_with(mock_now)
+        setup._get_adjusted_next_event_time.assert_called_once_with(mock_now, future_time, None)
+        assert setup._update_event_time == future_time
+
+    def test_update_schedules_next_event(self, setup):
+        """Tests the update method correctly schedules the next event based on the future time"""
+        mock_now = get_aware_utc_now()
+        future_time = mock_now + timedelta(minutes=5)
+        setup.get_next_event_time = MagicMock(return_value=future_time)
+        setup._get_adjusted_next_event_time = MagicMock(return_value=future_time)
+
+        setup.update(mock_now)
+
+        # assert the _update_event is scheduled correctly
+        setup.parent.core.schedule.assert_called_once_with(future_time, setup.update, future_time)
+        assert setup._update_event_time == future_time
+
+        #TODO add more tests for update
 
 
 if __name__ == '__main__':
