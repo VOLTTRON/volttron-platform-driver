@@ -676,6 +676,72 @@ class TestReservationManagerUpdate:
 
         #TODO add more tests for update
 
+class TestReservationManagerGetAdjustedNextEventTime:
+    # TODO maybe make tests for incorrect inputs? I dont think users directly access this so it should not matter
+    @pytest.fixture
+    def setup(self):
+        parent = Mock()
+        parent.vip = Mock()
+        parent.vip.config.get = MagicMock(return_value=pickle.dumps({}))
+        parent.vip.config.set = MagicMock()
+        parent.config = Mock()
+        parent.config.reservation_publish_interval = 60
+        grace_time = 10
+
+        reservation_manager = ReservationManager(parent, grace_time)
+        reservation_manager._cleanup = MagicMock()
+        reservation_manager.save_state = MagicMock()
+        return reservation_manager
+    def test_get_adjusted_next_event_time(self, setup):
+        """Tests that it returns the next event time when next event is before previously reserved time"""
+        now = datetime.now()
+        next_event_time = now + timedelta(minutes=1)  # 60 seconds ahead
+        previously_reserved_time = now + timedelta(minutes=2)  # 120 seconds ahead
+
+        adjusted_time = setup._get_adjusted_next_event_time(now, next_event_time, previously_reserved_time)
+        assert adjusted_time == next_event_time, "The adjusted time should be the next event time"
+    def test_get_adjusted_next_event_time_previously_returned(self, setup):
+        """Tests that it returns the previously reserved time when next event is after previously reserved time"""
+        now = datetime.now()
+        next_event_time = now + timedelta(minutes=2)  # 120 seconds ahead
+        previously_reserved_time = now + timedelta(minutes=1)  # 60 seconds ahead
+
+        adjusted_time = setup._get_adjusted_next_event_time(now, next_event_time, previously_reserved_time)
+        assert adjusted_time == previously_reserved_time, "The adjusted time should be the previous event time"
+
+class TestReservationManagerLoadState:
+    @pytest.fixture
+    def setup(self):
+        parent = Mock()
+        parent.config = Mock(reservation_publish_interval=60)
+        manager = ReservationManager(parent, grace_time=10)
+        manager._cleanup = MagicMock()
+        return manager
+
+    def test_load_state_none_initial_string(self, setup):
+        """Tests loading state with None initial state string."""
+        now = get_aware_utc_now()
+        setup.load_state(now=now, initial_state_string=None)
+        assert setup.tasks == {}, "Tasks should be empty when initial state string is None"
+
+    def test_load_state_valid_initial_string(self, setup):
+        """Tests loading state with a valid initial state string """
+        now = get_aware_utc_now()
+        setup.load_state(now=now, initial_state_string=pickle.dumps({'task1': 'data1'}))
+        assert 'task1' in setup.tasks, "Tasks should contain the loaded data."
+
+    def test_load_state_pickle_error(self, setup):
+        """Test loading state with a pickle error."""
+        now = get_aware_utc_now()
+        setup.load_state(now=now, initial_state_string= b'not a pickle')
+        assert setup.tasks == {}, "Tasks should be empty after a pickle error"
+
+    def test_load_state_general_exception(self, setup):
+        """Test loading state with a normal string"""
+        now = get_aware_utc_now()
+        setup.load_state(now=now, initial_state_string='unpickleable data')
+        assert setup.tasks == {}, "Tasks should be empty after an exception."
+
 
 if __name__ == '__main__':
     pytest.main()
