@@ -1,22 +1,19 @@
 import pickle
 import pytest
-from mock import MagicMock, Mock
-from platform_driver.agent import PlatformDriverAgent, PlatformDriverConfigV1, PlatformDriverConfig
+from mock import MagicMock, Mock, patch
+from platform_driver.agent import PlatformDriverAgent
 from platform_driver.reservations import ReservationManager, Task, TimeSlice, Reservation
 from pickle import dumps
 from base64 import b64encode
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from volttron.utils import get_aware_utc_now
-from volttrontesting import TestServer
-from volttron.client import Agent
-from pydantic import ValidationError
 
 class TestNewTask:
     sender = "test.agent"
     task_id = "test_task_id"
     requests = [['device1', '2022-01-01T00:00:00', '2022-01-01T01:00:00']]
     @pytest.fixture
-    def setup(self):
+    def reservation_manager(self):
         parent = Mock()
         parent.vip = Mock()
         parent.vip.config.get = MagicMock(return_value=pickle.dumps({}))
@@ -25,79 +22,79 @@ class TestNewTask:
         parent.config.reservation_publish_interval = 60  # Mock the interval for testing
         grace_time = 10
 
-        reservation_manager = ReservationManager(parent, grace_time)
-        reservation_manager._cleanup = MagicMock()
-        reservation_manager.save_state = MagicMock()
-        return reservation_manager
+        rm = ReservationManager(parent, grace_time)
+        rm._cleanup = MagicMock()
+        rm.save_state = MagicMock()
+        return rm
 
-    def test_new_task_valid_inputs(self, setup):
-        result = setup.new_task(self.sender, self.task_id, priority='HIGH', requests=self.requests)
+    def test_new_task_valid_inputs(self, reservation_manager):
+        result = reservation_manager.new_task(self.sender, self.task_id, priority='HIGH', requests=self.requests)
         assert result.success
-    def test_new_task_with_invalid_sender(self, setup):
-        result = setup.new_task(sender="", task_id=self.task_id, priority="HIGH", requests=self.requests)
+    def test_new_task_with_invalid_sender(self, reservation_manager):
+        result = reservation_manager.new_task(sender="", task_id=self.task_id, priority="HIGH", requests=self.requests)
         assert result.info_string == 'MALFORMED_REQUEST: TypeError: agent_id must be a nonempty string' and not result.success
-    def test_missing_agent_id(self, setup):
-        result = setup.new_task(sender=None, task_id=self.task_id, priority="HIGH", requests=self.requests)
+    def test_missing_agent_id(self, reservation_manager):
+        result = reservation_manager.new_task(sender=None, task_id=self.task_id, priority="HIGH", requests=self.requests)
         assert result.info_string == 'MISSING_AGENT_ID' and not result.success
-    def test_invalid_task_id(self, setup):
+    def test_invalid_task_id(self, reservation_manager):
         """ Tests task request with missing task id, empty task id, and int task id"""
-        result = setup.new_task(self.sender, task_id=None, priority="HIGH", requests=self.requests)
+        result = reservation_manager.new_task(self.sender, task_id=None, priority="HIGH", requests=self.requests)
         assert result.info_string == 'MISSING_TASK_ID' and not result.success
 
-        result = setup.new_task(self.sender, task_id="", priority="HIGH", requests=self.requests)
+        result = reservation_manager.new_task(self.sender, task_id="", priority="HIGH", requests=self.requests)
         assert result.info_string == 'MALFORMED_REQUEST: TypeError: taskid must be a nonempty string' and not result.success
 
-        result = setup.new_task(self.sender, task_id=1234, priority="HIGH", requests=self.requests)
+        result = reservation_manager.new_task(self.sender, task_id=1234, priority="HIGH", requests=self.requests)
         assert result.info_string == 'MALFORMED_REQUEST: TypeError: taskid must be a nonempty string' and not result.success
-    def test_requests_malformed(self, setup):
+    def test_requests_malformed(self, reservation_manager):
         """ Tests malformed request by creating new task with empty dates"""
-        result = setup.new_task(self.sender, self.task_id, priority="HIGH", requests=[])
+        result = reservation_manager.new_task(self.sender, self.task_id, priority="HIGH", requests=[])
         assert result.info_string == 'MALFORMED_REQUEST_EMPTY' and not result.success
-    def test_new_task_missing_priority(self, setup):
-        result = setup.new_task(self.sender, self.task_id, priority=None, requests=self.requests)
+    def test_new_task_missing_priority(self, reservation_manager):
+        result = reservation_manager.new_task(self.sender, self.task_id, priority=None, requests=self.requests)
         assert result.info_string == 'MISSING_PRIORITY' and not result.success
-    def test_lowercase_priority(self, setup):
-        result = setup.new_task(self.sender, self.task_id, priority="low", requests=self.requests)
+    def test_lowercase_priority(self, reservation_manager):
+        result = reservation_manager.new_task(self.sender, self.task_id, priority="low", requests=self.requests)
         assert result.success
-    def test_invalid_priority(self, setup):
+    def test_invalid_priority(self, reservation_manager):
         """ Tests an invalid priority (Medium priority does not exist)"""
-        result = setup.new_task(self.sender, self.task_id, priority="MEDIUM", requests=self.requests)
+        result = reservation_manager.new_task(self.sender, self.task_id, priority="MEDIUM", requests=self.requests)
         assert result.info_string == 'INVALID_PRIORITY' and not result.success
-    def test_task_exists(self, setup):
+    def test_task_exists(self, reservation_manager):
         task_id = "test_task_id"
         mock_task = Mock()
         mock_task.make_current = Mock()  # add the make_current method to the mock task
-        setup.tasks[task_id] = mock_task
+        reservation_manager.tasks[task_id] = mock_task
 
-        result = setup.new_task(self.sender, task_id, priority="HIGH", requests=self.requests)
+        result = reservation_manager.new_task(self.sender, task_id, priority="HIGH", requests=self.requests)
         assert result.info_string == 'TASK_ID_ALREADY_EXISTS' and result.success == False
-    def test_request_new_task_should_succeed_on_preempt_self(self, setup):
+    def test_request_new_task_should_succeed_on_preempt_self(self, reservation_manager):
         """
         Test schedule preemption by a higher priority task from the same sender.
         """
-        result = setup.new_task(self.sender, self.task_id, priority='LOW_PREEMPT', requests=self.requests)
+        result = reservation_manager.new_task(self.sender, self.task_id, priority='LOW_PREEMPT', requests=self.requests)
         assert result.success
-        result = setup.new_task(self.sender, "high_priority_task_id", priority='HIGH', requests=self.requests)
+        result = reservation_manager.new_task(self.sender, "high_priority_task_id", priority='HIGH', requests=self.requests)
         assert result.success
         assert result.info_string == 'TASKS_WERE_PREEMPTED'
-    def test_schedule_preempt_other(self, setup):
+    def test_schedule_preempt_other(self, reservation_manager):
         """
         Test schedule preemption by a higher priority task from a different sender.
         """
-        result = setup.new_task("agent1", self.task_id, priority='LOW_PREEMPT', requests=self.requests)
+        result = reservation_manager.new_task("agent1", self.task_id, priority='LOW_PREEMPT', requests=self.requests)
         assert result.success
-        result = setup.new_task("agent2", "high_priority_task_id", priority='HIGH', requests=self.requests)
+        result = reservation_manager.new_task("agent2", "high_priority_task_id", priority='HIGH', requests=self.requests)
         assert result.success
         assert result.info_string == 'TASKS_WERE_PREEMPTED'
-    def test_reservation_conflict(self, setup):
+    def test_reservation_conflict(self, reservation_manager):
         """
         Test task conflict from different agents.
         """
-        result = setup.new_task("agent1", self.task_id, priority='LOW', requests=self.requests)
+        result = reservation_manager.new_task("agent1", self.task_id, priority='LOW', requests=self.requests)
         assert result.success
-        result = setup.new_task("agent2", "different_task_id", priority='LOW', requests=self.requests)
+        result = reservation_manager.new_task("agent2", "different_task_id", priority='LOW', requests=self.requests)
         assert result.info_string == 'CONFLICTS_WITH_EXISTING_RESERVATIONS'
-    def test_reservation_conflict_self(self, setup):
+    def test_reservation_conflict_self(self, reservation_manager):
         """
         Test task conflict from one request.
         """
@@ -106,29 +103,29 @@ class TestNewTask:
             ['device1', '2022-01-01T00:00:00', '2022-01-01T01:00:00'],
             ['device1', '2022-01-01T00:00:00', '2022-01-01T01:00:00']
         ]
-        result = setup.new_task("agent2", self.task_id, priority='LOW', requests=requests)
+        result = reservation_manager.new_task("agent2", self.task_id, priority='LOW', requests=requests)
         assert result.info_string == 'REQUEST_CONFLICTS_WITH_SELF'
-    def test_schedule_overlap(self, setup):
+    def test_schedule_overlap(self, reservation_manager):
         """
         Test successful task when end time of one time slot is the same as
         start time of another slot.
         """
         time_1 = ['device1', '2022-01-01T00:00:00', '2022-01-01T01:00:00']
         time_2 = ['device2', '2022-01-01T01:00:00', '2022-01-02T01:00:00']
-        result = setup.new_task("agent1", self.task_id, priority='LOW', requests=time_1)
+        result = reservation_manager.new_task("agent1", self.task_id, priority='LOW', requests=time_1)
         assert result.success
-        result = setup.new_task("agent2", "different_task_id", priority='LOW', requests=time_2)
+        result = reservation_manager.new_task("agent2", "different_task_id", priority='LOW', requests=time_2)
         assert result.success
-    def test_cancel_error_invalid_task(self, setup):
+    def test_cancel_error_invalid_task(self, reservation_manager):
         """
         Test invalid task id when trying to cancel a task.
         """
         # creating task with a task_id of "task_that_exists"
-        result = setup.new_task(self.sender, task_id="task_that_exists", priority='LOW', requests=self.requests)
+        result = reservation_manager.new_task(self.sender, task_id="task_that_exists", priority='LOW', requests=self.requests)
         assert result.success
         # trying to cancel a task with a task_id of "unexistent_task_id"
-        result = setup.cancel_task(sender=self.sender, task_id="unexistent_task_id")
-        assert result.info_string == 'TASK_ID_DOES_NOT_EXIST'
+        result = reservation_manager.cancel_task(sender=self.sender, task_id="unexistent_task_id")
+        assert result.info_string == 'TASK_ID_DOES_NOT_EXIST', "task id should not exist"
 
 class TestCancelTask:
     sender = "test.agent"
@@ -144,31 +141,29 @@ class TestCancelTask:
         parent.config.reservation_publish_interval = 10
         parent.core = Mock()
         grace_time = 10
-        reservation_manager = ReservationManager(parent, grace_time)
-        return reservation_manager
+        rm = ReservationManager(parent, grace_time)
+        return rm
     def test_cancel_task_nonexistent_id(self, reservation_manager):
         result = reservation_manager.cancel_task(self.sender, self.task_id)
-        assert result.success == False
-        assert result.info_string == 'TASK_ID_DOES_NOT_EXIST'
+        assert result.success == False, "result should fail"
+        assert result.info_string == 'TASK_ID_DOES_NOT_EXIST', "task should not exist"
 
     def test_cancel_task_agent_id_mismatch(self, reservation_manager):
         # Add a task with a different agent ID
         reservation_manager.tasks[self.task_id] = Mock(agent_id="different.agent")
         result = reservation_manager.cancel_task(self.sender, self.task_id)
-        assert result.success == False
-        assert result.info_string == 'AGENT_ID_TASK_ID_MISMATCH'
+        assert result.success == False, "result should fail"
+        assert result.info_string == 'AGENT_ID_TASK_ID_MISMATCH', "info string should be agent id task id mismatch"
 
     def test_cancel_task_success(self, reservation_manager):
         # Add a task with the correct agent ID
         reservation_manager.tasks[self.task_id] = Mock(agent_id=self.sender)
         result = reservation_manager.cancel_task(self.sender, self.task_id)
-        assert result.success == True
-        assert self.task_id not in reservation_manager.tasks
+        assert result.success == True, "result should succeed"
+        assert self.task_id not in reservation_manager.tasks, "task id should no longer be in tasks"
 
 class TestSaveState:
-    sender = "test.agent"
-    task_id = "test_task_id"
-    now = datetime.now()
+    now = get_aware_utc_now()
 
     @pytest.fixture
     def reservation_manager(self):
@@ -182,11 +177,11 @@ class TestSaveState:
 
         # Setting up the ReservationManager with mocked logger
         grace_time = 10
-        manager = ReservationManager(parent, grace_time)
-        manager._cleanup = MagicMock()
-        manager._log = logger
+        rm = ReservationManager(parent, grace_time)
+        rm._cleanup = MagicMock()
+        rm._log = logger
 
-        return manager
+        return rm
     def test_save_state_set_called_once(self, reservation_manager):
         expected_data = b64encode(dumps(reservation_manager.tasks)).decode("utf-8")
 
@@ -197,13 +192,13 @@ class TestSaveState:
             reservation_manager.reservation_state_file,
             expected_data,
             send_update=False
-        )
+        ), "save state should call parent.vip.config.set with correct data"
     def test_save_state_correct_file_name(self, reservation_manager):
         # make sure it's correct before
-        assert reservation_manager.reservation_state_file == "_reservation_state"  #
+        assert reservation_manager.reservation_state_file == "_reservation_state", "file name should be _reservation_state before"
         reservation_manager.save_state(self.now)
         # and after calling save_state
-        assert reservation_manager.reservation_state_file == "_reservation_state"
+        assert reservation_manager.reservation_state_file == "_reservation_state", "file name should be _reservation_state after"
 
 class TestPopulateReservation:
     requests = [
@@ -212,7 +207,6 @@ class TestPopulateReservation:
     ]
     @pytest.fixture
     def task(self):
-        # Create a Task instance. Assuming the constructor accepts `agent_id`, `priority`, and `requests`.
         return Task(agent_id="test_agent", priority="HIGH", requests=[])
 
     def test_populate_reservation_with_valid_inputs(self, task):
@@ -235,17 +229,17 @@ class TestTaskMakeCurrent:
     @pytest.fixture
     def task(self):
         # Create a Task instance with mock reservations and a set time slice.
-        t = Task(agent_id="test_agent", priority="HIGH", requests=[])
+        task = Task(agent_id="test_agent", priority="HIGH", requests=[])
         # Mocking device reservations within the task
-        t.devices = {
+        task.devices = {
             'device1': MagicMock(),
             'device2': MagicMock()
         }
         # our task is active starting NOW for 1 hour
         start_time = datetime.now()
         end_time = datetime.now() + timedelta(hours=1)
-        t.time_slice = TimeSlice(start_time, end_time)
-        return t
+        task.time_slice = TimeSlice(start_time, end_time)
+        return task
 
     def test_task_already_finished(self, task):
         """set task state to finished, which clears devices, then we check that task.devices is empty"""
@@ -259,23 +253,23 @@ class TestTaskMakeCurrent:
         task.devices['device1'].finished.return_value = True
         task.devices['device2'].finished.return_value = False
         task.make_current(now)
-        assert 'device1' not in task.devices
-        assert 'device2' in task.devices
+        assert 'device1' not in task.devices, "device1 should be removed from task.devices."
+        assert 'device2' in task.devices, "device2 should be in task.devices"
     def test_state_transition_to_pre_run(self, task):
         """Tests calling make current with a time before the task is set to start"""
         past_time = datetime.now() - timedelta(hours=1) # one hour before task starts
         task.make_current(past_time)
-        assert task.state == Task.STATE_PRE_RUN
+        assert task.state == Task.STATE_PRE_RUN, "task state should be in pre run"
     def test_state_transition_running(self, task):
         """Tests calling make current 30 minutes after it has started """
         within_time = datetime.now() + timedelta(minutes=30) # 30 minutes after task has started
         task.make_current(within_time)
-        assert task.state == Task.STATE_RUNNING
+        assert task.state == Task.STATE_RUNNING, "task state should be running"
     def test_state_transition_finished(self, task):
         """Tests calling make current with a time after the task is finished """
         past_time = datetime.now() + timedelta(hours=2) # 1 hr after task was set to end
         task.make_current(past_time)
-        assert task.state == Task.STATE_FINISHED
+        assert task.state == Task.STATE_FINISHED, "task state should be finished"
 
 class TestCheckCanPreemptOther:
     @pytest.fixture
@@ -630,7 +624,7 @@ class TestReservationGetConflicts:
 
 class TestReservationManagerUpdate:
     @pytest.fixture
-    def setup(self):
+    def reservation_manager(self):
         parent = Mock()
         parent.vip = Mock()
         parent.vip.config.get = MagicMock(return_value=pickle.dumps({}))
@@ -639,47 +633,34 @@ class TestReservationManagerUpdate:
         parent.config.reservation_publish_interval = 60
         grace_time = 10
 
-        reservation_manager = ReservationManager(parent, grace_time)
-        reservation_manager._cleanup = MagicMock()
-        reservation_manager.save_state = MagicMock()
-        return reservation_manager
+        rm = ReservationManager(parent, grace_time)
+        rm._cleanup = MagicMock()
+        rm.save_state = MagicMock()
+        return rm
 
-    def test_update_adjusts_time_correctly(self, setup):
+    def test_update_adjusts_time_correctly(self, reservation_manager):
         """Tests that the update method adjusts the event timing correctly and schedules the next event properly """
         mock_now = get_aware_utc_now()
         future_time = mock_now + timedelta(minutes=5)
 
-        setup.get_next_event_time = MagicMock(return_value=future_time)
-        setup.get_reservation_state = MagicMock(return_value={})
-        setup._get_adjusted_next_event_time = MagicMock(return_value=future_time)
+        reservation_manager.get_next_event_time = MagicMock(return_value=future_time)
+        reservation_manager.get_reservation_state = MagicMock(return_value={})
+        reservation_manager._get_adjusted_next_event_time = MagicMock(return_value=future_time)
 
-        setup.update(now=mock_now)
+        reservation_manager.update(now=mock_now)
 
         # assert the internal method calls
-        setup.get_reservation_state.assert_called_once_with(mock_now)
-        setup.get_next_event_time.assert_called_once_with(mock_now)
-        setup._get_adjusted_next_event_time.assert_called_once_with(mock_now, future_time, None)
-        assert setup._update_event_time == future_time
-
-    def test_update_schedules_next_event(self, setup):
-        """Tests the update method correctly schedules the next event based on the future time"""
-        mock_now = get_aware_utc_now()
-        future_time = mock_now + timedelta(minutes=5)
-        setup.get_next_event_time = MagicMock(return_value=future_time)
-        setup._get_adjusted_next_event_time = MagicMock(return_value=future_time)
-
-        setup.update(mock_now)
-
-        # assert the _update_event is scheduled correctly
-        setup.parent.core.schedule.assert_called_once_with(future_time, setup.update, future_time)
-        assert setup._update_event_time == future_time
+        reservation_manager.get_reservation_state.assert_called_once_with(mock_now), "get_reservation_state should be called once"
+        reservation_manager.get_next_event_time.assert_called_once_with(mock_now), "get_next_event_time should be called once"
+        reservation_manager._get_adjusted_next_event_time.assert_called_once_with(mock_now, future_time, None), "get_adjusted_next_event_time should be called once"
+        assert reservation_manager._update_event_time == future_time, "Updated event time should be the future time"
 
         #TODO add more tests for update
 
 class TestReservationManagerGetAdjustedNextEventTime:
-    # TODO maybe make tests for incorrect inputs? I dont think users directly access this so it should not matter
+    now = get_aware_utc_now()
     @pytest.fixture
-    def setup(self):
+    def reservation_manager(self):
         parent = Mock()
         parent.vip = Mock()
         parent.vip.config.get = MagicMock(return_value=pickle.dumps({}))
@@ -688,59 +669,118 @@ class TestReservationManagerGetAdjustedNextEventTime:
         parent.config.reservation_publish_interval = 60
         grace_time = 10
 
-        reservation_manager = ReservationManager(parent, grace_time)
-        reservation_manager._cleanup = MagicMock()
-        reservation_manager.save_state = MagicMock()
-        return reservation_manager
-    def test_get_adjusted_next_event_time(self, setup):
+        rm = ReservationManager(parent, grace_time)
+        rm._cleanup = MagicMock()
+        rm.save_state = MagicMock()
+        return rm
+    def test_get_adjusted_next_event_time(self, reservation_manager):
         """Tests that it returns the next event time when next event is before previously reserved time"""
-        now = datetime.now()
-        next_event_time = now + timedelta(minutes=1)  # 60 seconds ahead
-        previously_reserved_time = now + timedelta(minutes=2)  # 120 seconds ahead
+        next_event_time = self.now + timedelta(minutes=1)  # 60 seconds ahead
+        previously_reserved_time = self.now + timedelta(minutes=2)  # 120 seconds ahead
 
-        adjusted_time = setup._get_adjusted_next_event_time(now, next_event_time, previously_reserved_time)
+        adjusted_time = reservation_manager._get_adjusted_next_event_time(self.now, next_event_time, previously_reserved_time)
         assert adjusted_time == next_event_time, "The adjusted time should be the next event time"
-    def test_get_adjusted_next_event_time_previously_returned(self, setup):
+    def test_get_adjusted_next_event_time_previously_returned(self, reservation_manager):
         """Tests that it returns the previously reserved time when next event is after previously reserved time"""
-        now = datetime.now()
-        next_event_time = now + timedelta(minutes=2)  # 120 seconds ahead
-        previously_reserved_time = now + timedelta(minutes=1)  # 60 seconds ahead
+        next_event_time = self.now + timedelta(minutes=2)  # 120 seconds ahead
+        previously_reserved_time = self.now + timedelta(minutes=1)  # 60 seconds ahead
 
-        adjusted_time = setup._get_adjusted_next_event_time(now, next_event_time, previously_reserved_time)
+        adjusted_time = reservation_manager._get_adjusted_next_event_time(self.now, next_event_time, previously_reserved_time)
         assert adjusted_time == previously_reserved_time, "The adjusted time should be the previous event time"
 
-class TestReservationManagerLoadState:
+class TestGetReservationState:
     @pytest.fixture
-    def setup(self):
+    def reservation_manager(self):
         parent = Mock()
-        parent.config = Mock(reservation_publish_interval=60)
-        manager = ReservationManager(parent, grace_time=10)
-        manager._cleanup = MagicMock()
-        return manager
+        parent.vip.config.get = MagicMock()
+        parent.vip.config.set = MagicMock()
 
-    def test_load_state_none_initial_string(self, setup):
-        """Tests loading state with None initial state string."""
-        now = get_aware_utc_now()
-        setup.load_state(now=now, initial_state_string=None)
-        assert setup.tasks == {}, "Tasks should be empty when initial state string is None"
+        grace_time = 10
+        rm = ReservationManager(parent, grace_time)
 
-    def test_load_state_valid_initial_string(self, setup):
-        """Tests loading state with a valid initial state string """
-        now = get_aware_utc_now()
-        setup.load_state(now=now, initial_state_string=pickle.dumps({'task1': 'data1'}))
-        assert 'task1' in setup.tasks, "Tasks should contain the loaded data."
+        task = Mock()
+        task.agent_id = "agent1"
+        task.get_current_slots = MagicMock(return_value={
+            "device1": Mock(end=datetime.now() + timedelta(minutes=5))
+        })
 
-    def test_load_state_pickle_error(self, setup):
-        """Test loading state with a pickle error."""
-        now = get_aware_utc_now()
-        setup.load_state(now=now, initial_state_string= b'not a pickle')
-        assert setup.tasks == {}, "Tasks should be empty after a pickle error"
+        # add tasks to running and preempted sets
+        rm.tasks = {"task1": task}
+        rm.running_tasks = {"task1"}
+        rm.preempted_tasks = set()
 
-    def test_load_state_general_exception(self, setup):
-        """Test loading state with a normal string"""
-        now = get_aware_utc_now()
-        setup.load_state(now=now, initial_state_string='unpickleable data')
-        assert setup.tasks == {}, "Tasks should be empty after an exception."
+        rm._cleanup = MagicMock()
+        return rm
+
+    def test_get_reservation_state(self, reservation_manager):
+        """Tests that get reservation state returns the correct reservation state"""
+        now = datetime.now()
+        result = reservation_manager.get_reservation_state(now)
+
+        reservation_manager._cleanup.assert_called_once_with(now), "_cleanup should be called with (now)"
+        device_state = result["device1"]
+
+        assert "device1" in result, "Device1 should be in reservation state"
+        assert device_state.agent_id == "agent1", "agent1 should be in agent_id"
+        assert device_state.task_id == "task1", "task1 should be in task_id"
+        assert device_state.time_remaining > 299, "There should be time remaining on the running task"
+
+class TestCleanup:
+    now = get_aware_utc_now()
+    @pytest.fixture
+    def reservation_manager(self):
+        parent = Mock()
+        parent.vip.config.get = MagicMock()
+        parent.vip.config.set = MagicMock()
+
+        grace_time = 10
+        rm = ReservationManager(parent, grace_time)
+
+        # mock the task states
+        rm.task_finished = Mock(spec=Task)
+        rm.task_finished.state = Task.STATE_FINISHED
+
+        rm.task_running = Mock(spec=Task)
+        rm.task_running.state = Task.STATE_RUNNING
+
+        rm.task_preempted = Mock(spec=Task)
+        rm.task_preempted.state = Task.STATE_PREEMPTED
+
+        # Setup the manager with our mock tasks.
+        rm.tasks = {
+            "finished": rm.task_finished,
+            "running": rm.task_running,
+            "preempted": rm.task_preempted
+        }
+
+        return rm
+
+    def test_cleanup_finished_task(self, reservation_manager):
+        """Tests that cleanup removed finished tasks"""
+        assert "finished" in reservation_manager.tasks
+        assert reservation_manager.task_finished.state == Task.STATE_FINISHED
+
+        reservation_manager._cleanup(self.now)
+
+        assert "finished" not in reservation_manager.tasks, "finished tasks should have been removed"
+        assert "finished" not in reservation_manager.running_tasks, "finished tasks should have been removed"
+        assert "finished" not in reservation_manager.preempted_tasks, "finished tasks should have been removed"
+
+    def test_cleanup_running_task(self, reservation_manager):
+        """Tests that _cleanup correctly added running tasks based on task state"""
+        reservation_manager._cleanup(self.now)
+
+        assert "running" in reservation_manager.running_tasks, "running tasks should remain"
+        assert "running" not in reservation_manager.preempted_tasks, "running task should not be in preempted tasks"
+        assert "running" in reservation_manager.tasks, "running should be in tasks"
+
+    def test_cleanup_preempted_task(self, reservation_manager):
+        """Tests that _cleanup correctly added the preempted tasks based on task state"""
+        reservation_manager._cleanup(self.now)
+
+        assert "preempted" in reservation_manager.preempted_tasks, "preempted task should stay"
+        assert "preempted" not in reservation_manager.running_tasks, "preempted task should not be set in running tasks"
+        assert "preempted" in reservation_manager.tasks, "preempted should exist in tasks"
 
 
 if __name__ == '__main__':
