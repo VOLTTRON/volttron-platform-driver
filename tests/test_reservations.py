@@ -615,8 +615,38 @@ class TestReservationManagerGetAdjustedNextEventTime:
         adjusted_time = reservation_manager._get_adjusted_next_event_time(self.now, next_event_time, previously_reserved_time)
         assert adjusted_time == previously_reserved_time, "The adjusted time should be the previous event time"
 
-class TestReservationManagerLoadState: #TODO add tests for load_state in the reservation manager class
-    pass
+class TestReservationManagerLoadState:
+    @pytest.fixture
+    def reservation_manager(self):
+        parent = Mock()
+        parent.config = Mock(reservation_publish_interval=60)
+        rm = ReservationManager(parent, grace_time=10)
+        rm._cleanup = MagicMock()
+        return rm
+
+    def test_load_state_none_initial_string(self, reservation_manager):
+        """Tests loading state with None initial state string."""
+        now = get_aware_utc_now()
+        reservation_manager.load_state(now=now, initial_state_string=None)
+        assert reservation_manager.tasks == {}, "Tasks should be empty when initial state string is None"
+
+    def test_load_state_valid_initial_string(self, reservation_manager):
+        """Tests loading state with a valid initial state string """
+        now = get_aware_utc_now()
+        reservation_manager.load_state(now=now, initial_state_string=pickle.dumps({'task1': 'data1'}))
+        assert 'task1' in reservation_manager.tasks, "Tasks should contain the loaded data."
+
+    def test_load_state_pickle_error(self, reservation_manager):
+        """Test loading state with a pickle error."""
+        now = get_aware_utc_now()
+        reservation_manager.load_state(now=now, initial_state_string= b'not a pickle')
+        assert reservation_manager.tasks == {}, "Tasks should be empty after a pickle error"
+
+    def test_load_state_general_exception(self, reservation_manager):
+        """Test loading state with a normal string"""
+        now = get_aware_utc_now()
+        reservation_manager.load_state(now=now, initial_state_string='unpickleable data')
+        assert reservation_manager.tasks == {}, "Tasks should be empty after an exception."
 class TestReservationManagerSaveState:
     now = get_aware_utc_now()
 
