@@ -434,8 +434,22 @@ class TestReservationMakeCurrent:
             0] == future_time_slot, "Only past time slots should be removed."
 
 class TestReservationReserveSlot:
-    pass
-    # TODO create tests
+    @pytest.fixture
+    def reservation(self):
+        res = Reservation()
+        res.check_availability = MagicMock(return_value=set())
+        return res
+
+    def test_reserve_slot(self, reservation):
+        """tests that reserve slot calls check avilability with the time slot"""
+        now = get_aware_utc_now()
+        time_slot = TimeSlice(now)
+        reservation.reserve_slot(time_slot)
+
+        reservation.check_availability.assert_called_once_with(time_slot), \
+            "check_avilability should be called with time_slot as argument"
+        assert time_slot in reservation.time_slots, "time slot should be in time_slots"
+
 class TestReservationGetNextEventTime:
     @pytest.fixture
     def reservation(self):
