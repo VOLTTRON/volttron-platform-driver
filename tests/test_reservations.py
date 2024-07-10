@@ -8,6 +8,40 @@ from base64 import b64encode
 from datetime import datetime, timedelta
 from volttron.utils import get_aware_utc_now
 
+
+class TestTimeSliceStretchToInclude:
+    now = datetime.utcnow()
+
+    def test_start_is_none(self):
+        ts1 = TimeSlice(start=None, end=self.now + timedelta(hours=2))
+        ts2 = TimeSlice(start=self.now + timedelta(hours=1), end=self.now + timedelta(hours=3))
+        ts1.stretch_to_include(ts2)
+        assert ts1.start == ts2.start, "start should be updated to ts2's start"
+
+    def test_end_is_none(self):
+        ts1 = TimeSlice(start=self.now, end=None)
+        ts2 = TimeSlice(start=self.now - timedelta(hours=1), end=self.now + timedelta(hours=1))
+        ts1.stretch_to_include(ts2)
+        assert ts1.end == ts2.end, "end should be updated to ts2's end"
+
+    def test_extend_before_start(self):
+        ts = TimeSlice(start=self.now + timedelta(hours=2), end=self.now + timedelta(hours=3))
+        time_slice = TimeSlice(start=self.now + timedelta(hours=1), end=self.now + timedelta(hours=2))
+        ts.stretch_to_include(time_slice)
+        assert ts.start == time_slice.start, "start should be updated to time_slice's start"
+
+    def test_extend_after_end(self):
+        ts = TimeSlice(start=self.now - timedelta(hours=2), end=self.now)
+        time_slice = TimeSlice(start=self.now - timedelta(hours=2), end=self.now + timedelta(hours=2))
+        ts.stretch_to_include(time_slice)
+        assert ts.end == time_slice.end, "end should be updated to time_slice's end"
+
+    def test_within_current_timeslice(self):
+        ts = TimeSlice(start=self.now, end=self.now + timedelta(hours=4))
+        new_ts = TimeSlice(start=self.now + timedelta(hours=1), end=self.now + timedelta(hours=2))
+        ts.stretch_to_include(new_ts)
+        assert ts.start == self.now, "start should remain the same"
+        assert ts.end == self.now + timedelta(hours=4), "end should remain the same"
 class TestTaskPopulateReservation:
     requests = [
         ["device1", datetime(2022, 1, 1, 12, 0), datetime(2022, 1, 1, 13, 0)],
@@ -80,7 +114,7 @@ class TestTaskMakeCurrent:
         task.make_current(past_time)
         assert task.state == Task.STATE_FINISHED, "task state should be finished"
 
-class TestTaskGetCurrentSlot: #TODO make test for get_current_slots in task class
+class TestTaskGetCurrentSlot:
     @pytest.fixture
     def task(self):
         # Create a Task instance with mock reservations and a set time slice.
@@ -90,27 +124,99 @@ class TestTaskGetCurrentSlot: #TODO make test for get_current_slots in task clas
             'device1': MagicMock(),
             'device2': MagicMock()
         }
-        # our task is active starting NOW for 1 hour
-        start_time = datetime.now()
-        end_time = datetime.now() + timedelta(hours=1)
-        task.time_slice = TimeSlice(start_time, end_time)
         return task
 
-class TestTaskGetConflicts: #TODO make test for get_conflicts in task class
+    def test_get_current_slots_during_active_time(self, task):
+        """Tests return when two slots are active"""
+        now = datetime.now()
+        task.devices['device1'].get_current_slot.return_value = TimeSlice(now, now + timedelta(minutes=30))
+        task.devices['device2'].get_current_slot.return_value = TimeSlice(now, now + timedelta(minutes=45))
+
+        current_slots = task.get_current_slots(now)
+
+        assert len(current_slots) == 2
+        assert 'device1' in current_slots
+        assert 'device2' in current_slots
+
+    def test_get_current_slots_with_no_active_slots(self, task):
+        """Tests return when two slots are none"""
+        now = datetime.now()
+        task.devices['device1'].get_current_slot.return_value = None
+        task.devices['device2'].get_current_slot.return_value = None
+
+        current_slots = task.get_current_slots(now)
+
+        assert current_slots == {}
+
+    def test_get_current_slots_with_mixed_active_and_inactive_slots(self, task):
+        """Tests that get current slots returns correct slots when mixed"""
+        now = datetime.now()
+        task.devices['device1'].get_current_slot.return_value = TimeSlice(now, now + timedelta(minutes=30))
+        task.devices['device2'].get_current_slot.return_value = None
+
+        current_slots = task.get_current_slots(now)
+
+        assert len(current_slots) == 1
+        assert 'device1' in current_slots
+        assert 'device2' not in current_slots
+
+
+class TestTaskGetConflicts:
     @pytest.fixture
     def task(self):
-        # Create a Task instance with mock reservations and a set time slice.
-        task = Task(agent_id="test_agent", priority="HIGH", requests=[])
-        # Mocking device reservations within the task
+        now = datetime.now()
+
+        task = Task(agent_id="agent1", priority="HIGH", requests=[])
+        reservation1 = Reservation()
+        # starts now for 1 hour
+        reservation1.time_slots.append(TimeSlice(start=now, end=now + timedelta(hours=1)))
+        # starts in two hours and lasts for 1
+        reservation1.time_slots.append(TimeSlice(start=now + timedelta(hours=2), end=now + timedelta(hours=3)))
         task.devices = {
-            'device1': MagicMock(),
-            'device2': MagicMock()
+            'device1': reservation1, # two time slots
+            'device2': Reservation() # empty reservation
         }
-        # our task is active starting NOW for 1 hour
-        start_time = datetime.now()
-        end_time = datetime.now() + timedelta(hours=1)
-        task.time_slice = TimeSlice(start_time, end_time)
         return task
+
+    def test_no_conflicts(self, task):
+        """Tests no conflicts returned when checking"""
+        other_task = Task(agent_id="agent2", priority="LOW", requests=[])
+        other_task.devices['device1'] = Reservation()
+        other_task.devices['device1'].time_slots.append(
+            # starts in 4hrs and lasts for 1hr
+            TimeSlice(start=datetime.now() + timedelta(hours=4), end=datetime.now() + timedelta(hours=5))
+        )
+
+        conflicts = task.get_conflicts(other_task)
+        assert conflicts == [], "There should be no conflicts."
+
+    def test_partial_conflicts(self, task):
+        """Tests partial conflicts returned"""
+        other_task = Task(agent_id="agent2", priority="LOW", requests=[])
+        other_task.devices['device1'] = Reservation()
+        other_task.devices['device1'].time_slots.append(
+            # starts in 30 minutes (conflict with fixture) lasts for 1.5hrs
+            TimeSlice(start=datetime.now() + timedelta(minutes=30), end=datetime.now() + timedelta(hours=1, minutes=30))
+        )
+
+        conflicts = task.get_conflicts(other_task)
+        assert len(conflicts) == 1, "There should be one conflict."
+
+    def test_complete_conflicts(self, task):
+        """Tests complete conflicts returned"""
+        other_task = Task(agent_id="agent2", priority="LOW", requests=[])
+        other_task.devices['device1'] = Reservation()
+        other_task.devices['device1'].time_slots.append(
+            # starts now and ends in 1 hour
+            TimeSlice(start=datetime.now(), end=datetime.now() + timedelta(hours=1))
+        )
+        # starts in two hours and lasts for 1 hour
+        other_task.devices['device1'].time_slots.append(
+            TimeSlice(start=datetime.now() + timedelta(hours=2), end=datetime.now() + timedelta(hours=3))
+        )
+
+        conflicts = task.get_conflicts(other_task)
+        assert len(conflicts) == 2, "There should be two conflicts"
 class TestTaskCheckCanPreemptOther:
     @pytest.fixture
     def high_priority_task(self):
