@@ -1,15 +1,262 @@
-import pickle
 import pytest
 from unittest.mock import MagicMock, Mock
-# from mock import Mock, MagicMock
 from platform_driver.agent import PlatformDriverAgent
-from platform_driver.reservations import ReservationManager
-from pickle import dumps
-from base64 import b64encode
-from datetime import datetime, timedelta
-from volttrontesting import TestServer
-from volttron.client import Agent
-from pydantic import ValidationError
+
+
+class TestPlatformDriverAgentLoadVersionedConfig:
+    @pytest.fixture
+    def PDA(self):
+        PDA = PlatformDriverAgent()
+        PDA.core = Mock()
+        PDA.vip = Mock()
+        return PDA
+    def test_load_empty_config(self, PDA):
+        """Test loading an empty config."""
+        config = {}
+        result = PDA._load_versioned_config(config)
+        assert result.config_version == 1
+    def test_loading_based_on_version(self, PDA):
+        """Tests loading a config based on version."""
+        # Load v1 this also tests using a version less than the current version
+        config_v1 = {'config_version': 1, 'publish_depth_first_all': True}
+        result = PDA._load_versioned_config(config_v1)
+        assert result.publish_depth_first_all == True
+        assert result.config_version == 1
+
+        config_v2 = {'config_version': 2, 'publish_depth_first_any': True}
+        result_v2 = PDA._load_versioned_config(config_v2)
+        assert result_v2.config_version == 2
+        assert result_v2.publish_depth_first_any == True
+    def test_deprecation_warning_for_old_config_versions(self, PDA, caplog):
+        config_old_version = {'config_version': 1}
+        result = PDA._load_versioned_config(config_old_version)
+        assert "Deprecation Warning" in caplog.text
+
+class TestPlatformDriverAgentConfigureMain:
+    @pytest.fixture
+    def PDA(self):
+        from platform_driver.agent import PlatformDriverAgent
+        agent = PlatformDriverAgent()
+        agent.vip = Mock()
+        agent.config = Mock()
+        agent.remote_heartbeat_interval = Mock()
+        agent.heartbeat_greenlet = Mock()
+        agent.poll_scheduler = Mock()
+        agent.reservation_manager = Mock()
+        agent.override_manager = Mock()
+        agent.scalability_test = Mock()
+        return agent
+
+class TestPlatformDriverAgentConfigureNewEquipment:
+    """Tests for _configure_new_equipment."""
+    # TODO wait for function to be fully finished
+    pass
+
+class TestPlatformDriverAgentGetOrCreateRemote:
+    """Tests for _get_or_create_remote"""
+    # TODO wait for function to be fully finished
+    pass
+
+class TestPlatformDriverAgentUpdateEquipment:
+    """Tests for _update_equipment."""
+    # TODO wait for function to be fully finished
+    pass
+
+class TestPlatformDriverAgentRemoveEquipment:
+    """Tests for remove_equipment."""
+    # TODO wait for function to be fully finished
+    pass
+
+class TestPlatformDriverAgentResolveTags:
+    """Tests for resolve_tags"""
+    @pytest.fixture
+    def PDA(self):
+        agent = PlatformDriverAgent()
+        agent.vip = MagicMock()
+        return agent
+
+    def test_resolve_tags_success(self, PDA):
+        """Test resolve_tags method with successful return from tagging service."""
+        tags = ["tag1", "tag2"]
+        expected_tag_list = ["topic1", "topic2"]
+
+        # Mock the RPC call to return a successful result
+        PDA.vip.rpc.call.return_value.get.return_value = expected_tag_list
+
+        result = PDA.resolve_tags(tags)
+
+        # Validate the result and that the RPC call was made with correct parameters
+        assert result == expected_tag_list
+        PDA.vip.rpc.call.assert_called_once_with('platform.tagging', 'get_topics_by_tags', tags)
+
+    def test_resolve_tags_no_tags(self, PDA):
+        """Test resolve_tags method returning no tags."""
+        tags = ["tag1", "tag2"]
+        PDA.vip.rpc.call.return_value.get.return_value = []
+
+        result = PDA.resolve_tags(tags)
+
+        assert result == []
+        PDA.vip.rpc.call.assert_called_once_with('platform.tagging', 'get_topics_by_tags', tags)
+
+class TestPlatformDriverAgentBuildQueryPlan:
+    """Tests for build_query_plan."""
+    # TODO come back to this, not really understanding it
+    @pytest.fixture
+    def PDA(self):
+        agent = PlatformDriverAgent()
+        agent.vip = MagicMock()
+        return agent
+
+class TestPlatformDriverAgentGet:
+    """Tests for get."""
+    @pytest.fixture
+    def PDA(self):
+        PDA = PlatformDriverAgent()
+        PDA.vip = MagicMock()  # Mock vip if needed
+        PDA.equipment_tree = MagicMock()
+        return PDA
+
+    def test_get_no_points(self, PDA):
+        """Test get method with no points in the query plan."""
+        PDA.build_query_plan = MagicMock(return_value={})
+
+        results, errors = PDA.get(topic=None, tag=None, regex=None)
+
+        assert results == {}
+        assert errors == {}
+        PDA.build_query_plan.assert_called_once_with(None, None, None)
+
+    def test_get_with_node_not_found(self, PDA):
+        """Test get method where a node is not found in the equipment tree"""
+        remote_mock = MagicMock()
+        point_mock = MagicMock(identifier="point")
+
+        # Mock the build_query_plan to return a predefined query plan
+        PDA.build_query_plan = MagicMock(return_value={
+            remote_mock: {point_mock}
+        })
+
+        # mock
+        remote_mock.get_multiple_points.return_value = (
+            {"point": "value"},
+            {"point_err": "error"}
+        )
+
+        PDA.equipment_tree.get_node.return_value = None
+
+        results, errors = PDA.get(topic="topic", tag="tag", regex="regex")
+
+        assert results == {"point": "value"}
+        assert errors == {"point_err": "error"}
+
+        # Validate if methods were called with correct parameters
+        PDA.build_query_plan.assert_called_once_with("topic", "regex", "tag")
+        remote_mock.get_multiple_points.assert_called_once_with(["point"])
+
+class TestPlatformDriverAgentSet:
+    """Tests for set"""
+    pass # TODO wait for final additions
+
+class TestPlatformDriverAgentRevert:
+    """Tests for revert"""
+    pass # TODO wait for final additions
+
+class TestPlatformDriverAgentLast:
+    """Tests for Last"""
+
+    @pytest.fixture
+    def PDA(self):
+        agent = PlatformDriverAgent()
+        agent.vip = MagicMock()
+        agent.equipment_tree = MagicMock()
+        agent.poll_scheduler = MagicMock()
+        return agent
+
+    def test_last_default(self, PDA):
+        """Test last method with default arguments."""
+        point_mock = MagicMock(topic="point1", last_value="value1", last_updated="2023-01-01T00:00:00Z")
+        PDA.equipment_tree.find_points.return_value = [point_mock]
+
+        result = PDA.last(topic="topic")
+        expected = {
+            "point1": {"value": "value1", "updated": "2023-01-01T00:00:00Z"}
+        }
+        assert result == expected
+        PDA.equipment_tree.find_points.assert_called_once_with("topic", None, None)
+
+    def test_start_points_not_active_reschedule_allowed(self, PDA):
+        """Test start method where points are not active and rescheduling is allowed."""
+        PDA.config.allow_reschedule = True
+        point_mock = MagicMock(topic="point1", active=False)
+        PDA.equipment_tree.find_points.return_value = [point_mock]
+
+        PDA.start(topic="topic")
+
+        PDA.equipment_tree.find_points.assert_called_once_with("topic", None, None)
+        assert point_mock.active is True
+        PDA.poll_scheduler.schedule.assert_called_once()
+        PDA.poll_scheduler.add_to_schedule.assert_not_called()
+
+class TestPlatformDriverAgentStart:
+    """Tests for Start"""
+
+    @pytest.fixture
+    def PDA(self):
+        agent = PlatformDriverAgent()
+        agent.vip = MagicMock()
+        agent.equipment_tree = MagicMock()
+        agent.poll_scheduler = MagicMock()
+        agent.config = MagicMock()
+        return agent
+
+    def test_start_no_points_found(self, PDA):
+        """Test start method with no matching points."""
+        PDA.equipment_tree.find_points.return_value = []
+
+        PDA.start(topic="topic")
+
+        PDA.equipment_tree.find_points.assert_called_once_with("topic", None, None)
+        PDA.poll_scheduler.schedule.assert_not_called()
+        PDA.poll_scheduler.add_to_schedule.assert_not_called()
+
+    def test_start_points_already_active(self, PDA):
+        """Test start method where the points are already active."""
+        point_mock = MagicMock(topic="point1", active=True)
+        PDA.equipment_tree.find_points.return_value = [point_mock]
+
+        PDA.start(topic="topic")
+
+        PDA.equipment_tree.find_points.assert_called_once_with("topic", None, None)
+        assert point_mock.active is True
+        PDA.poll_scheduler.schedule.assert_not_called()
+        PDA.poll_scheduler.add_to_schedule.assert_not_called()
+
+    def test_start_points_not_active_reschedule_allowed(self, PDA):
+        """Test start method where points are not active and rescheduling is allowed."""
+        PDA.config.allow_reschedule = True
+        point_mock = MagicMock(topic="point1", active=False)
+        PDA.equipment_tree.find_points.return_value = [point_mock]
+
+        PDA.start(topic="topic")
+
+        PDA.equipment_tree.find_points.assert_called_once_with("topic", None, None)
+        assert point_mock.active is True
+        PDA.poll_scheduler.schedule.assert_called_once()
+        PDA.poll_scheduler.add_to_schedule.assert_not_called()
+
+    def test_start_points_not_active_reschedule_not_allowed(self, PDA):
+        """Test start method where points are not active and rescheduling is not allowed."""
+        PDA.config.allow_reschedule = False
+        point_mock = MagicMock(topic="point1", active=False)
+        PDA.equipment_tree.find_points.return_value = [point_mock]
+
+        PDA.start(topic="topic")
+
+        PDA.equipment_tree.find_points.assert_called_once_with("topic", None, None)
+        assert point_mock.active is True
+        PDA.poll_scheduler.schedule.assert_not_called()
+        PDA.poll_scheduler.add_to_schedule.assert_called_once_with(point_mock)
 class TestSetPoint:
     sender = "test.agent"
     path = "devices/device1"
@@ -229,53 +476,7 @@ class TestGetPoint:
         kwargs = {"random_thing": "test"}
         PDA.get_point(topic='device/topic', point="SampleWritableFloat", **kwargs)
         PDA._equipment_id.assert_called_with("device/topic", "SampleWritableFloat")
-class TestLoadVersionedConfig:
-    @pytest.fixture
-    def PDA(self):
-        PDA = PlatformDriverAgent()
-        PDA.core = Mock()
-        PDA.vip = Mock()
-        return PDA
-    def test_load_empty_config(self, PDA):
-        """Test loading an empty config."""
-        config = {}
-        result = PDA._load_versioned_config(config)
-        assert result.config_version == 1
-    def test_loading_based_on_version(self, PDA):
-        """Tests loading a config based on version."""
-        # Load v1 this also tests using a version less than the current version
-        config_v1 = {'config_version': 1, 'publish_depth_first_all': True}
-        result = PDA._load_versioned_config(config_v1)
-        assert result.publish_depth_first_all == True
-        assert result.config_version == 1
 
-        # Load v2
-        config_v2 = {'config_version': 2, 'publish_depth_first_any': True}
-        result_v2 = PDA._load_versioned_config(config_v2)
-        assert result_v2.config_version == 2
-        assert result_v2.publish_depth_first_any == True
-    def test_deprecation_warning_for_old_config_versions(self, PDA, caplog):
-        config_old_version = {'config_version': 1}
-        result = PDA._load_versioned_config(config_old_version)
-        assert "Deprecation Warning" in caplog.text
-
-    # def test_load_invalid_config(self, PDA, caplog):
-        # """Test that an invalid config logs a warning and raises a ValidationError."""
-        # # TODO catch type error and validation error
-        # config = {'config_version': "two", 'invalid_field': "someting"}
-        #
-        # # Expecting a ValidationError to be raised
-        # with pytest.raises(ValueError):
-        #     PDA._load_versioned_config(config)
-        #
-        # # Expecting a specific warning message in the logs
-        # expected_warning = "Validation of platform driver configuration file failed."
-        # assert expected_warning in caplog.text, "Expected warning message not found in log"
-
-# class TestConfigureMain:
-#     @pytest.fixture()
-#     def PDA(self):
-#     # TODO come back to
 
 if __name__ == '__main__':
     pytest.main()
