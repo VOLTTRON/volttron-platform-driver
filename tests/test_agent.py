@@ -257,6 +257,156 @@ class TestPlatformDriverAgentStart:
         assert point_mock.active is True
         PDA.poll_scheduler.schedule.assert_not_called()
         PDA.poll_scheduler.add_to_schedule.assert_called_once_with(point_mock)
+
+class TestPlatformDriverAgentStop:
+    """Tests for Stop"""
+
+    @pytest.fixture
+    def PDA(self):
+        agent = PlatformDriverAgent()
+        agent.vip = MagicMock()
+        agent.equipment_tree = MagicMock()
+        agent.poll_scheduler = MagicMock()
+        agent.config = MagicMock()
+        return agent
+
+    def test_stop_no_points_found(self, PDA):
+        """Test stop method with no matching points."""
+        PDA.equipment_tree.find_points.return_value = []
+
+        PDA.stop(topic="topic")
+
+        PDA.equipment_tree.find_points.assert_called_once_with("topic", None, None)
+        PDA.poll_scheduler.schedule.assert_not_called()
+        PDA.poll_scheduler.remove_from_schedule.assert_not_called()
+
+    def test_stop_points_already_inactive(self, PDA):
+        """Test stop method where the points are already inactive."""
+        point_mock = MagicMock(topic="point1", active=False)
+        PDA.equipment_tree.find_points.return_value = [point_mock]
+
+        PDA.stop(topic="topic")
+
+        PDA.equipment_tree.find_points.assert_called_once_with("topic", None, None)
+        assert point_mock.active is False
+        PDA.poll_scheduler.schedule.assert_not_called()
+        PDA.poll_scheduler.remove_from_schedule.assert_not_called()
+
+    def test_stop_points_active_reschedule_allowed(self, PDA):
+        """Test stop method where points are active and rescheduling is allowed."""
+        PDA.config.allow_reschedule = True
+        point_mock = MagicMock(topic="point1", active=True)
+        PDA.equipment_tree.find_points.return_value = [point_mock]
+
+        PDA.stop(topic="topic")
+
+        PDA.equipment_tree.find_points.assert_called_once_with("topic", None, None)
+        assert point_mock.active is False
+        PDA.poll_scheduler.schedule.assert_called_once()
+        PDA.poll_scheduler.remove_from_schedule.assert_not_called()
+
+    def test_stop_points_active_reschedule_not_allowed(self, PDA):
+        """Test stop method where points are active and rescheduling is not allowed."""
+        PDA.config.allow_reschedule = False
+        point_mock = MagicMock(topic="point1", active=True)
+        PDA.equipment_tree.find_points.return_value = [point_mock]
+
+        PDA.stop(topic="topic")
+
+        PDA.equipment_tree.find_points.assert_called_once_with("topic", None, None)
+        assert point_mock.active is False
+        PDA.poll_scheduler.schedule.assert_not_called()
+        PDA.poll_scheduler.remove_from_schedule.assert_called_once_with(point_mock)
+
+class TestPlatformDriverAgentEnable:
+    @pytest.fixture
+    def PDA(self):
+        agent = PlatformDriverAgent()
+        agent.vip = MagicMock()
+        agent.equipment_tree = MagicMock()
+        return agent
+
+    def test_enable_no_nodes_found(self, PDA):
+        """Test enable method with no matching nodes."""
+        PDA.equipment_tree.find_points.return_value = []
+
+        PDA.enable(topic="topic")
+
+        PDA.equipment_tree.find_points.assert_called_once_with("topic", None, None)
+        PDA.vip.config.set.assert_not_called()
+        PDA.equipment_tree.get_device_node.assert_not_called()
+
+    def test_enable_non_point_nodes(self, PDA):
+        """Test enable method on non-point nodes without triggering callback."""
+        node_mock = MagicMock(is_point=False, topic="node1", config={})
+        PDA.equipment_tree.find_points.return_value = [node_mock]
+
+        PDA.enable(topic="topic")
+
+        PDA.equipment_tree.find_points.assert_called_once_with("topic", None, None)
+        assert node_mock.config['active'] is True
+        PDA.vip.config.set.assert_called_once_with(node_mock.topic, node_mock.config, trigger_callback=False)
+        PDA.equipment_tree.get_device_node.assert_not_called()
+
+    def test_enable_point_nodes(self, PDA):
+        """Test enable method on point nodes and updating the registry."""
+        node_mock = MagicMock(is_point=True, topic="node1", config={}, identifier="node1_id")
+        device_node_mock = MagicMock()
+        PDA.equipment_tree.find_points.return_value = [node_mock]
+        PDA.equipment_tree.get_device_node.return_value = device_node_mock
+
+        PDA.enable(topic="topic")
+
+        PDA.equipment_tree.find_points.assert_called_once_with("topic", None, None)
+        assert node_mock.config['active'] is True
+        PDA.equipment_tree.get_device_node.assert_called_once_with(node_mock.identifier)
+        device_node_mock.update_registry_row.assert_called_once_with(node_mock.config)
+        PDA.vip.config.set.assert_not_called()
+
+class TestPlatformDriverAgentDisable:
+    @pytest.fixture
+    def PDA(self):
+        agent = PlatformDriverAgent()
+        agent.vip = MagicMock()
+        agent.equipment_tree = MagicMock()
+        return agent
+
+    def test_disable_no_nodes_found(self, PDA):
+        """Test disable method with no matching nodes."""
+        PDA.equipment_tree.find_points.return_value = []
+
+        PDA.disable(topic="topic")
+
+        PDA.equipment_tree.find_points.assert_called_once_with("topic", None, None)
+        PDA.vip.config.set.assert_not_called()
+        PDA.equipment_tree.get_device_node.assert_not_called()
+
+    def test_disable_non_point_nodes(self, PDA):
+        """Test disable method on non-point nodes without triggering callback."""
+        node_mock = MagicMock(is_point=False, topic="node1", config={})
+        PDA.equipment_tree.find_points.return_value = [node_mock]
+
+        PDA.disable(topic="topic")
+
+        PDA.equipment_tree.find_points.assert_called_once_with("topic", None, None)
+        assert node_mock.config['active'] is False
+        PDA.vip.config.set.assert_called_once_with(node_mock.topic, node_mock.config, trigger_callback=False)
+        PDA.equipment_tree.get_device_node.assert_not_called()
+
+    def test_disable_point_nodes(self, PDA):
+        """Test disable method on point nodes and updating the registry."""
+        node_mock = MagicMock(is_point=True, topic="node1", config={}, identifier="node1_id")
+        device_node_mock = MagicMock()
+        PDA.equipment_tree.find_points.return_value = [node_mock]
+        PDA.equipment_tree.get_device_node.return_value = device_node_mock
+
+        PDA.disable(topic="topic")
+
+        PDA.equipment_tree.find_points.assert_called_once_with("topic", None, None)
+        assert node_mock.config['active'] is False
+        PDA.equipment_tree.get_device_node.assert_called_once_with(node_mock.identifier)
+        device_node_mock.update_registry_row.assert_called_once_with(node_mock.config)
+        PDA.vip.config.set.assert_not_called()
 class TestSetPoint:
     sender = "test.agent"
     path = "devices/device1"
