@@ -364,6 +364,7 @@ class TestPlatformDriverAgentEnable:
         PDA.vip.config.set.assert_not_called()
 
 class TestPlatformDriverAgentDisable:
+    """ Tests for disable function"""
     @pytest.fixture
     def PDA(self):
         agent = PlatformDriverAgent()
@@ -407,75 +408,25 @@ class TestPlatformDriverAgentDisable:
         PDA.equipment_tree.get_device_node.assert_called_once_with(node_mock.identifier)
         device_node_mock.update_registry_row.assert_called_once_with(node_mock.config)
         PDA.vip.config.set.assert_not_called()
-class TestSetPoint:
-    sender = "test.agent"
-    path = "devices/device1"
-    point_name = "SampleWritableFloat1"
-    value = 0.2
+
+class TestPlatformDriverAgentNewReservation:
+    """ Tests for new reservation """
 
     @pytest.fixture
     def PDA(self):
-        PDA = PlatformDriverAgent()
+        agent = PlatformDriverAgent()
+        agent.vip = MagicMock()
+        agent.reservation_manager = MagicMock()
+        agent.vip.rpc.context.vip_message.peer = "test.agent"
 
-        # Mock 'vip' components
-        PDA.vip = MagicMock()
-        PDA.vip.rpc.context = MagicMock()
-        PDA.vip.rpc.context.vip_message.peer = self.sender
+        return agent
 
-        # Mock _equipment_id
-        PDA._equipment_id = Mock(return_value="processed_point_name")
+    def test_new_reservation(self, PDA):
+        PDA.new_reservation(task_id="task1", priority="LOW", requests=[])
 
-        # Mock 'equipment_tree.get_node'
-        node_mock = MagicMock()
-        PDA.equipment_tree = MagicMock()
-        PDA.equipment_tree.get_node = Mock(return_value=node_mock)
-
-        # Mock other methods called in set_point
-        node_mock.get_remote = Mock(return_value=Mock())
-        PDA.equipment_tree.raise_on_locks = Mock()
-        PDA._get_headers = Mock(return_value={})
-        PDA._push_result_topic_pair = Mock()
-
-        return PDA
-
-    def test_set_point_calls_equipment_id_with_correct_parameters(self, PDA):
-        """Test set_point calls equipment_id method with correct parameters."""
-        PDA.set_point(path = 'device/topic', point_name = 'SampleWritableFloat', value = 42, kwargs = {})
-        # Assert that self._equipment_id was called with the correct arguments
-        PDA._equipment_id.assert_called_with("device/topic", "SampleWritableFloat")
-    def test_set_point_with_topic_kwarg(self, PDA):
-        """Test handling of 'topic' as keyword arg"""
-        kwargs = {'topic': 'device/topic'}
-        PDA.set_point(path = 'ignored_path', point_name = None, value = 42, **kwargs)
-        PDA._equipment_id.assert_called_with('device/topic', None)
-    def test_set_point_with_point_kwarg(self, PDA):
-        """ Test handling of 'point' keyword arg """
-        kwargs = {'point': 'SampleWritableFloat'}
-        PDA.set_point(path = 'device/topic', point_name = None, value = 42, **kwargs)
-        PDA._equipment_id.assert_called_with('device/topic', 'SampleWritableFloat')
-    def test_set_point_with_combined_path_and_empty_point(self, PDA):
-        """Test handling of path containing the point name and point_name is empty"""
-        # TODO is this expected? to call it with None? it does not use the path with the point name when point name is none?
-        kwargs = {}
-        PDA.set_point(path = 'device/topic/SampleWritableFloat', point_name = None, value = 42, **kwargs)
-        PDA._equipment_id.assert_called_with("device/topic/SampleWritableFloat", None)
-
-    def test_set_point_raises_error_for_invalid_node(self, PDA):
-        # Mock get_node to return None
-        PDA.equipment_tree.get_node.return_value = None
-        kwargs = {}
-
-        # Call the set_point function and check for ValueError
-        with pytest.raises(ValueError, match="No equipment found for topic: processed_point_name"):
-            PDA.set_point(path = 'device/topic', point_name = 'SampleWritableFloat', value = 42, **kwargs)
-    def test_set_point_deprecated(self, PDA):
-        """Test old style actuator call"""
-        PDA.set_point("ilc.agnet", 'device/topic', 42, 'SampleWritableFloat', {})
-        # TODO shouldnt this work? its receiving old style params but adding none to the end...
-        # TODO as of now it is mostly working it seems.
-        # Assert that self._equipment_id was called with the correct arguments
-        # TODO this should be the same as the test above it but for some reason its not.
-        PDA._equipment_id.assert_called_with(("device/topic", "SampleWritableFloat"), None)
+        PDA.reservation_manager.new_reservation.assert_called_once_with(
+            "test.agent", "task1", "LOW", [], publish_result=False
+        )
 
 class TestHandleSet:
     sender = "test.agent"
@@ -626,6 +577,113 @@ class TestGetPoint:
         kwargs = {"random_thing": "test"}
         PDA.get_point(topic='device/topic', point="SampleWritableFloat", **kwargs)
         PDA._equipment_id.assert_called_with("device/topic", "SampleWritableFloat")
+
+class TestSetPoint:
+    sender = "test.agent"
+    path = "devices/device1"
+    point_name = "SampleWritableFloat1"
+    value = 0.2
+
+    @pytest.fixture
+    def PDA(self):
+        PDA = PlatformDriverAgent()
+
+        # Mock 'vip' components
+        PDA.vip = MagicMock()
+        PDA.vip.rpc.context = MagicMock()
+        PDA.vip.rpc.context.vip_message.peer = self.sender
+
+        # Mock _equipment_id
+        PDA._equipment_id = Mock(return_value="processed_point_name")
+
+        # Mock 'equipment_tree.get_node'
+        node_mock = MagicMock()
+        PDA.equipment_tree = MagicMock()
+        PDA.equipment_tree.get_node = Mock(return_value=node_mock)
+
+        # Mock other methods called in set_point
+        node_mock.get_remote = Mock(return_value=Mock())
+        PDA.equipment_tree.raise_on_locks = Mock()
+        PDA._get_headers = Mock(return_value={})
+        PDA._push_result_topic_pair = Mock()
+
+        return PDA
+
+    def test_set_point_calls_equipment_id_with_correct_parameters(self, PDA):
+        """Test set_point calls equipment_id method with correct parameters."""
+        PDA.set_point(path = 'device/topic', point_name = 'SampleWritableFloat', value = 42, kwargs = {})
+        # Assert that self._equipment_id was called with the correct arguments
+        PDA._equipment_id.assert_called_with("device/topic", "SampleWritableFloat")
+    def test_set_point_with_topic_kwarg(self, PDA):
+        """Test handling of 'topic' as keyword arg"""
+        kwargs = {'topic': 'device/topic'}
+        PDA.set_point(path = 'ignored_path', point_name = None, value = 42, **kwargs)
+        PDA._equipment_id.assert_called_with('device/topic', None)
+    def test_set_point_with_point_kwarg(self, PDA):
+        """ Test handling of 'point' keyword arg """
+        kwargs = {'point': 'SampleWritableFloat'}
+        PDA.set_point(path = 'device/topic', point_name = None, value = 42, **kwargs)
+        PDA._equipment_id.assert_called_with('device/topic', 'SampleWritableFloat')
+    def test_set_point_with_combined_path_and_empty_point(self, PDA):
+        """Test handling of path containing the point name and point_name is empty"""
+        # TODO is this expected? to call it with None? it does not use the path with the point name when point name is none?
+        kwargs = {}
+        PDA.set_point(path = 'device/topic/SampleWritableFloat', point_name = None, value = 42, **kwargs)
+        PDA._equipment_id.assert_called_with("device/topic/SampleWritableFloat", None)
+
+    def test_set_point_raises_error_for_invalid_node(self, PDA):
+        # Mock get_node to return None
+        PDA.equipment_tree.get_node.return_value = None
+        kwargs = {}
+
+        # Call the set_point function and check for ValueError
+        with pytest.raises(ValueError, match="No equipment found for topic: processed_point_name"):
+            PDA.set_point(path = 'device/topic', point_name = 'SampleWritableFloat', value = 42, **kwargs)
+    def test_set_point_deprecated(self, PDA):
+        """Test old style actuator call"""
+        PDA.set_point("ilc.agnet", 'device/topic', 42, 'SampleWritableFloat', {})
+        # TODO shouldnt this work? its receiving old style params but adding none to the end...
+        # TODO as of now it is mostly working it seems.
+        # Assert that self._equipment_id was called with the correct arguments
+        # TODO this should be the same as the test above it but for some reason its not.
+        PDA._equipment_id.assert_called_with(("device/topic", "SampleWritableFloat"), None)
+
+class TestGetMultiplePoints:
+    sender = "test.agent"
+
+    @pytest.fixture
+    def PDA(self):
+        PDA = PlatformDriverAgent()
+
+        PDA.vip = MagicMock()
+        PDA.vip.rpc.context = MagicMock()
+        PDA.vip.rpc.context.vip_message.peer = self.sender
+
+        PDA._equipment_id = Mock(side_effect={'device1.point2', 'device1.point1'},)
+
+        PDA.get = Mock(return_value=({}, {}))
+
+        return PDA
+
+    def test_get_multiple_points_with_single_path(self, PDA):
+        """Test get_multiple_points with a single path"""
+        PDA.get_multiple_points(path='device1')
+        PDA.get.assert_called_once_with({'device1'})
+        PDA._equipment_id.assert_not_called()
+
+    def test_get_multiple_points_with_single_path_and_point_names(self, PDA):
+        """Test get_multiple_points with a single path and point names."""
+        PDA.get_multiple_points(path='device1', point_names=['point1', 'point2'])
+        PDA._equipment_id.assert_any_call('device1', 'point1')
+        PDA._equipment_id.assert_any_call('device1', 'point2')
+        PDA.get.assert_called_once_with({'device1.point1', 'device1.point2'})
+
+    def test_get_multiple_points_with_none_path(self, PDA):
+        """Test get_multiple_points with None path."""
+        with pytest.raises(TypeError, match='Argument "path" is required.'):
+            PDA.get_multiple_points(path=None)
+
+        PDA.get.assert_not_called()
 
 
 if __name__ == '__main__':
