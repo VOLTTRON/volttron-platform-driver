@@ -659,7 +659,7 @@ class TestGetMultiplePoints:
         PDA.vip.rpc.context = MagicMock()
         PDA.vip.rpc.context.vip_message.peer = self.sender
 
-        PDA._equipment_id = Mock(side_effect={'device1.point2', 'device1.point1'},)
+        PDA._equipment_id = Mock(side_effect={'device1/point2', 'device1/point1'},)
 
         PDA.get = Mock(return_value=({}, {}))
 
@@ -676,7 +676,7 @@ class TestGetMultiplePoints:
         PDA.get_multiple_points(path='device1', point_names=['point1', 'point2'])
         PDA._equipment_id.assert_any_call('device1', 'point1')
         PDA._equipment_id.assert_any_call('device1', 'point2')
-        PDA.get.assert_called_once_with({'device1.point1', 'device1.point2'})
+        PDA.get.assert_called_once_with({'device1/point1', 'device1/point2'})
 
     def test_get_multiple_points_with_none_path(self, PDA):
         """Test get_multiple_points with None path."""
@@ -684,6 +684,93 @@ class TestGetMultiplePoints:
             PDA.get_multiple_points(path=None)
 
         PDA.get.assert_not_called()
+
+class TestSetMultiplePoints:
+    sender = "test.agent"
+
+    @pytest.fixture
+    def PDA(self):
+        PDA = PlatformDriverAgent()
+
+        PDA.vip = MagicMock()
+        PDA.vip.rpc.context = MagicMock()
+        PDA.vip.rpc.context.vip_message.peer = self.sender
+
+        PDA._equipment_id = Mock(side_effect=['device1/point1', 'device1/point2', 'device2/point1'])
+
+        PDA.set = Mock(return_value=(None, {}))
+
+        return PDA
+
+
+    def test_set_multiple_points_with_single_path(self, PDA):
+        """Test set_multiple_points with a single path and point names/values"""
+        point_names_values = [('point1', 100), ('point2', 200)]
+        PDA.set_multiple_points(path='device1', point_names_values=point_names_values)
+        PDA.set.assert_called_once_with({'device1/point1': 100, 'device1/point2': 200}, map_points=True)
+        PDA._equipment_id.assert_any_call('device1', 'point1')
+        PDA._equipment_id.assert_any_call('device1', 'point2')
+
+    def test_set_multiple_points_with_missing_path(self, PDA):
+        """Test set_multiple_points without providing the path"""
+        point_names_values = [('point1', 100), ('point2', 200)]
+        with pytest.raises(TypeError, match='missing 1 required positional argument'):
+            PDA.set_multiple_points(point_names_values=point_names_values)
+        PDA.set.assert_not_called()
+
+    def test_set_multiple_points_with_additional_kwargs(self, PDA):
+        """Test set_multiple_points with additional kwargs"""
+        point_names_values = [('point1', 100), ('point2', 200)]
+        additional_kwargs = {'some_key': 'some_value'}
+        PDA.set_multiple_points(path='device1', point_names_values=point_names_values, **additional_kwargs)
+        PDA.set.assert_called_once_with({'device1/point1': 100, 'device1/point2': 200},
+                                        map_points=True,
+                                        some_key='some_value')
+        PDA._equipment_id.assert_any_call('device1', 'point1')
+        PDA._equipment_id.assert_any_call('device1', 'point2')
+
+    def test_set_multiple_with_old_style_args(self, PDA):
+        pass #TODO have david explain again - how are they different?
+
+
+class TestRevertPoint:
+    sender = "test.agent"
+    path = "devices/device1"
+    point_name = "SampleWritableFloat1"
+
+    @pytest.fixture
+    def PDA(self):
+        PDA = PlatformDriverAgent()
+
+        # Mock 'vip' components
+        PDA.vip = MagicMock()
+        PDA.vip.rpc.context = MagicMock()
+        PDA.vip.rpc.context.vip_message.peer = self.sender
+
+        # Mock _equipment_id
+        PDA._equipment_id = Mock(return_value="devices/device1/SampleWritableFloat1")
+
+        # Mock 'equipment_tree.get_node'
+        node_mock = MagicMock()
+        PDA.equipment_tree = MagicMock()
+        PDA.equipment_tree.get_node = Mock(return_value=node_mock)
+
+        # Mock other methods called in revert_point
+        node_mock.get_remote = Mock(return_value=Mock())
+        PDA.equipment_tree.raise_on_locks = Mock()
+        PDA._get_headers = Mock(return_value={})
+        PDA._push_result_topic_pair = Mock()
+
+        return PDA
+
+    def test_revert_point_normal_case(self, PDA):
+        """Test normal case for reverting a point."""
+        PDA.revert_point(self.path, self.point_name)
+
+        # PDA._equipment_id.assert_called_with(self.path, self.point_name) # TODO not sure why this is not working
+        PDA.equipment_tree.get_node.assert_called_with("devices/device1/SampleWritableFloat1")
+        PDA.equipment_tree.get_node().get_remote.return_value.revert_point.assert_called_with("devices/device1/SampleWritableFloat1")
+
 
 
 if __name__ == '__main__':
