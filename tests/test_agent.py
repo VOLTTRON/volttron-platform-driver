@@ -771,6 +771,213 @@ class TestRevertPoint:
         PDA.equipment_tree.get_node.assert_called_with("devices/device1/SampleWritableFloat1")
         PDA.equipment_tree.get_node().get_remote.return_value.revert_point.assert_called_with("devices/device1/SampleWritableFloat1")
 
+class TestRevertDevice:
+    sender = "test.agent"
+    path = "devices/device1"
+
+    @pytest.fixture
+    def PDA(self):
+        PDA = PlatformDriverAgent()
+
+        PDA.vip = MagicMock()
+        PDA.vip.rpc.context = MagicMock()
+        PDA.vip.rpc.context.vip_message.peer = self.sender
+
+        PDA._equipment_id = Mock(return_value="devices/device1")
+
+        node_mock = MagicMock()
+        PDA.equipment_tree = MagicMock()
+        PDA.equipment_tree.get_node = Mock(return_value=node_mock)
+
+        remote_mock = Mock()
+        node_mock.get_remote = Mock(return_value=remote_mock)
+
+        PDA.equipment_tree.raise_on_locks = Mock()
+        PDA._get_headers = Mock(return_value={})
+        PDA._push_result_topic_pair = Mock()
+
+        return PDA
+
+    def test_revert_device_normal_case(self, PDA):
+        """Test normal case for reverting a device"""
+        PDA.revert_device(self.path)
+
+        PDA._equipment_id.assert_called_with(self.path, None)
+        PDA.equipment_tree.get_node.assert_called_with("devices/device1")
+        get_node_mock = PDA.equipment_tree.get_node()
+        get_node_mock.get_remote().revert_all.assert_called_with()
+        PDA._push_result_topic_pair.assert_called()
+
+    def test_revert_device_actuator_style(self, PDA):
+        """Test old actuator-style arguments """
+        PDA.revert_device(self.sender, self.path)
+
+        PDA._equipment_id.assert_called_with(self.path, None)
+        PDA.equipment_tree.get_node.assert_called_with("devices/device1")
+        get_node_mock = PDA.equipment_tree.get_node()
+        get_node_mock.get_remote().revert_all.assert_called_with()
+        PDA._push_result_topic_pair.assert_called()
+
+    def test_revert_device_equipment_not_found(self, PDA):
+        """Test when no equipment is found """
+        PDA.equipment_tree.get_node.return_value = None
+
+        with pytest.raises(ValueError, match="No equipment found for topic: devices/device1"):
+            PDA.revert_device(self.path)
+
+    def test_revert_device_with_lock(self, PDA):
+        """Test when equipment node has a lock """
+        PDA.revert_device(self.path)
+
+        get_node_mock = PDA.equipment_tree.get_node()
+        PDA.equipment_tree.raise_on_locks.assert_called_with(get_node_mock, self.sender)
+        get_node_mock.get_remote().revert_all.assert_called_with()
+
+
+class TestHandleSet:
+    sender = "test.sender"
+    topic = "devices/actuators/set/device1/point1"
+    message = 10
+
+    @pytest.fixture
+    def PDA(self):
+        agent = PlatformDriverAgent()
+
+        agent._get_headers = Mock(return_value={})
+        agent._push_result_topic_pair = Mock()
+        agent.set_point = Mock()
+        agent._handle_error = Mock()
+
+        return agent
+
+    def test_handle_set_valid_message(self, PDA):
+        """Test setting a point with a valid message"""
+        PDA.handle_set(None, self.sender, None, self.topic, None, self.message)
+
+        point = self.topic.replace("devices/actuators/set/", "", 1)
+
+        PDA.set_point.assert_called_with(point, None, self.message)
+        PDA._push_result_topic_pair.assert_not_called()
+        PDA._handle_error.assert_not_called()
+
+    def test_handle_set_empty_message(self, PDA):
+        """Test handling of an empty message """
+        PDA.handle_set(None, self.sender, None, self.topic, None, None)
+
+        point = self.topic.replace("devices/actuators/set/", "", 1)
+        headers = PDA._get_headers(self.sender)
+        error = {'type': 'ValueError', 'value': 'missing argument'}
+
+        PDA._push_result_topic_pair.assert_called_with("devices/actuators/error", point, headers, error)
+        PDA.set_point.assert_not_called()
+        PDA._handle_error.assert_not_called()
+
+
+class TestHandleRevertPoint:
+    sender = "test.sender"
+    topic = "actuators/revert/point/device1/point1"
+
+    @pytest.fixture
+    def PDA(self):
+        agent = PlatformDriverAgent()
+
+        agent._get_headers = Mock(return_value={})
+        agent._push_result_topic_pair = Mock()
+        agent._handle_error = Mock()
+
+        # Mock equipment tree
+        mock_node = Mock()
+        mock_remote = Mock()
+        mock_node.get_remote.return_value = mock_remote
+        equipment_tree_mock = Mock()
+        equipment_tree_mock.get_node.return_value = mock_node
+        equipment_tree_mock.root = 'devices'
+
+        agent.equipment_tree = equipment_tree_mock
+
+        return agent, mock_node, mock_remote
+
+    def test_handle_revert_point_success(self, PDA):
+        """Test reverting a point successfully."""
+        agent_instance, mock_node, mock_remote = PDA
+        agent_instance.handle_revert_point(None, self.sender, None, self.topic, None, None)
+
+        expected_topic = "devices/actuators/revert/point/device1/point1"
+        headers = agent_instance._get_headers(self.sender)
+
+        agent_instance.equipment_tree.get_node.assert_called_with(expected_topic)
+        agent_instance.equipment_tree.raise_on_locks.assert_called_with(mock_node, self.sender)
+        mock_remote.revert_point.assert_called_with(expected_topic)
+        agent_instance._push_result_topic_pair.assert_called_with("devices/actuators/reverted/point", expected_topic,
+                                                                  headers, None)
+        agent_instance._handle_error.assert_not_called()
+
+    def test_handle_revert_point_exception(self, PDA):
+        """Test handling exception during revert process."""
+        agent_instance, mock_node, mock_remote = PDA
+        exception = Exception("test exception")
+        agent_instance.equipment_tree.get_node.side_effect = exception
+        agent_instance.handle_revert_point(None, self.sender, None, self.topic, None, None)
+
+        expected_topic = "devices/actuators/revert/point/device1/point1"
+        headers = agent_instance._get_headers(self.sender)
+
+        agent_instance.equipment_tree.get_node.assert_called_with(expected_topic)
+        agent_instance._handle_error.assert_called_with(exception, expected_topic, headers)
+
+class TestHandleRevertDevice:
+    sender = "test.sender"
+    topic = "devices/actuators/revert/device/device1"
+
+    @pytest.fixture
+    def agent(self):
+        agent = PlatformDriverAgent()
+
+        agent._get_headers = Mock(return_value={})
+        agent._push_result_topic_pair = Mock()
+        agent._handle_error = Mock()
+
+        mock_node = Mock()
+        mock_remote = Mock()
+        mock_node.get_remote.return_value = mock_remote
+        equipment_tree_mock = Mock()
+        equipment_tree_mock.get_node.return_value = mock_node
+        equipment_tree_mock.root = 'devices'
+
+        agent.equipment_tree = equipment_tree_mock
+
+        return agent, mock_node, mock_remote
+
+    def test_handle_revert_device_success(self, agent):
+        """Test reverting a device successfully."""
+        agent_instance, mock_node, mock_remote = agent
+        agent_instance.handle_revert_device(None, self.sender, None, self.topic, None, None)
+
+
+        expected_topic = "devices/device1"
+        headers = agent_instance._get_headers(self.sender)
+
+        agent_instance.equipment_tree.get_node.assert_called_with(expected_topic)
+        agent_instance.equipment_tree.raise_on_locks.assert_called_with(mock_node, self.sender)
+        mock_remote.revert_all.assert_called_once()
+        agent_instance._push_result_topic_pair.assert_called_with("devices/actuators/reverted/device", expected_topic, headers, None)
+        agent_instance._handle_error.assert_not_called()
+
+    def test_handle_revert_device_exception(self, agent):
+        """Test handling exception during revert process """
+        agent_instance, mock_node, mock_remote = agent
+        exception = Exception("test exception")
+        agent_instance.equipment_tree.get_node.side_effect = exception
+        agent_instance.handle_revert_device(None, self.sender, None, self.topic, None, None)
+
+        expected_topic = "devices/device1"
+        headers = agent_instance._get_headers(self.sender)
+
+        agent_instance.equipment_tree.get_node.assert_called_with(expected_topic)
+        agent_instance._handle_error.assert_called_with(exception, expected_topic, headers)
+
+
+
 
 
 if __name__ == '__main__':
