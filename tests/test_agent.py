@@ -976,6 +976,47 @@ class TestHandleRevertDevice:
         agent_instance.equipment_tree.get_node.assert_called_with(expected_topic)
         agent_instance._handle_error.assert_called_with(exception, expected_topic, headers)
 
+class TestHandleReservationRequest:
+    pass # TODO create tests
+
+class TestEquipmentId:
+    """ Tests for _equipment_id in the PlatFromDriveragent class"""
+
+    @pytest.fixture
+    def agent(self):
+        """Fixture to set up a PlatformDriverAgent with a mocked equipment_tree."""
+        agent = PlatformDriverAgent()
+        agent.equipment_tree = Mock()
+        agent.equipment_tree.root = "devices"
+        return agent
+
+    def test_equipment_id_basic(self, agent):
+        result = agent._equipment_id("some/path", "point")
+        assert result == "devices/some/path/point"
+
+    def test_equipment_id_no_point(self, agent):
+        result = agent._equipment_id("some/path")
+        assert result == "devices/some/path"
+
+    def test_equipment_id_leading_trailing_slashes(self, agent):
+        result = agent._equipment_id("/some/path/", "point")
+        assert result == "devices/some/path/point"
+
+    def test_equipment_id_no_point_leading_trailing_slashes(self, agent):
+        result = agent._equipment_id("/some/path/")
+        assert result == "devices/some/path"
+
+    def test_equipment_id_path_with_root(self, agent):
+        result = agent._equipment_id("devices/some/path", "point")
+        assert result == "devices/some/path/point"
+
+    def test_equipment_id_path_with_root_no_point(self, agent):
+        result = agent._equipment_id("devices/some/path")
+        assert result == "devices/some/path"
+
+    def test_equipment_id_only_path(self, agent):
+        result = agent._equipment_id("some/path")
+        assert result == "devices/some/path"
 
 
 
