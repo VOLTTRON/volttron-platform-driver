@@ -1,10 +1,8 @@
 import pytest
 from unittest.mock import MagicMock, Mock
 from platform_driver.agent import PlatformDriverAgent
-from volttron.utils import format_timestamp, get_aware_utc_now, load_config, setup_logging, vip_main
-from datetime import datetime, timezone
-from volttron.utils.jsonrpc import RemoteError
-from volttron.client.messaging import topics as t
+from volttron.utils import format_timestamp, get_aware_utc_now, setup_logging
+from datetime import datetime
 import logging
 
 setup_logging()
@@ -1069,10 +1067,6 @@ class TestGetHeaders:
         action_type = "NEW_SCHEDULE"
         result = PlatformDriverAgent()._get_headers(requester, time=custom_time, task_id=task_id, action_type=action_type)
         assert result == {'time': formatted_custom_time, 'requesterID': requester, 'taskID': task_id, 'type': action_type}
-
-
-
-
 
 if __name__ == '__main__':
     pytest.main()
