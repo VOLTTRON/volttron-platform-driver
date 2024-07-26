@@ -1,7 +1,15 @@
 import pytest
 from unittest.mock import MagicMock, Mock
 from platform_driver.agent import PlatformDriverAgent
+from volttron.utils import format_timestamp, get_aware_utc_now, load_config, setup_logging, vip_main
+from datetime import datetime, timezone
+from volttron.utils.jsonrpc import RemoteError
+from volttron.client.messaging import topics as t
+import logging
 
+setup_logging()
+_log = logging.getLogger(__name__)
+__version__ = '4.0'
 
 class TestPlatformDriverAgentLoadVersionedConfig:
     @pytest.fixture
@@ -1017,6 +1025,51 @@ class TestEquipmentId:
     def test_equipment_id_only_path(self, agent):
         result = agent._equipment_id("some/path")
         assert result == "devices/some/path"
+
+
+
+class TestGetHeaders:
+    """Tests for _get_headers in the PlatformDriverAgent class."""
+
+    def test_get_headers_no_optional(self):
+        requester = "test_requester"
+        now = get_aware_utc_now()
+        formatted_now = format_timestamp(now)
+        result = PlatformDriverAgent()._get_headers(requester=requester, time=now)
+        assert result == {'time': formatted_now, 'requesterID': requester, 'type': None}
+
+    def test_get_headers_with_time(self):
+        requester = "test_requester"
+        custom_time = datetime(2024, 7, 25, 18, 52, 29, 37938)
+        formatted_custom_time = format_timestamp(custom_time)
+        result = PlatformDriverAgent()._get_headers(requester, time=custom_time)
+        assert result == {'time': formatted_custom_time, 'requesterID': requester, 'type': None}
+
+    def test_get_headers_with_task_id(self):
+        requester = "test_requester"
+        task_id = "task123"
+        now = get_aware_utc_now()
+        formatted_now = format_timestamp(now)
+        result = PlatformDriverAgent()._get_headers(requester, time=now, task_id=task_id)
+        assert result == {'time': formatted_now, 'requesterID': requester, 'taskID': task_id, 'type': None}
+
+    def test_get_headers_with_action_type(self):
+        requester = "test_requester"
+        action_type = "NEW_SCHEDULE"
+        now = get_aware_utc_now()
+        formatted_now = format_timestamp(now)
+        result = PlatformDriverAgent()._get_headers(requester, time=now, action_type=action_type)
+        assert result == {'time': formatted_now, 'requesterID': requester, 'type': action_type}
+
+    def test_get_headers_all_optional(self):
+        requester = "test_requester"
+        custom_time = datetime(2024, 7, 25, 18, 52, 29, 37938)
+        formatted_custom_time = format_timestamp(custom_time)
+        task_id = "task123"
+        action_type = "NEW_SCHEDULE"
+        result = PlatformDriverAgent()._get_headers(requester, time=custom_time, task_id=task_id, action_type=action_type)
+        assert result == {'time': formatted_custom_time, 'requesterID': requester, 'taskID': task_id, 'type': action_type}
+
 
 
 
