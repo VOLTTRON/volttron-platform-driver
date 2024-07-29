@@ -1,13 +1,8 @@
 import pytest
 from unittest.mock import MagicMock, Mock
 from platform_driver.agent import PlatformDriverAgent
-from volttron.utils import format_timestamp, get_aware_utc_now, setup_logging
+from volttron.utils import format_timestamp, get_aware_utc_now
 from datetime import datetime
-import logging
-
-setup_logging()
-_log = logging.getLogger(__name__)
-__version__ = '4.0'
 
 class TestPlatformDriverAgentLoadVersionedConfig:
     @pytest.fixture
@@ -105,14 +100,47 @@ class TestPlatformDriverAgentResolveTags:
         assert result == []
         PDA.vip.rpc.call.assert_called_once_with('platform.tagging', 'get_topics_by_tags', tags)
 
+
 class TestPlatformDriverAgentBuildQueryPlan:
-    """Tests for build_query_plan."""
-    # TODO come back to this, not really understanding it
+    """Tests for build_query_plan"""
+
     @pytest.fixture
     def PDA(self):
         agent = PlatformDriverAgent()
         agent.vip = MagicMock()
+
+        point_node_mock = MagicMock()
+        point_node_mock.identifier = 'point1'
+        driver_agent_mock = MagicMock()
+
+        equipment_tree_mock = MagicMock()
+        equipment_tree_mock.find_points = MagicMock(return_value=[point_node_mock])
+        equipment_tree_mock.get_remote = MagicMock(return_value=driver_agent_mock)
+
+        agent.equipment_tree = equipment_tree_mock
+
+        agent.point_node_mock = point_node_mock
+        agent.driver_agent_mock = driver_agent_mock
+
         return agent
+
+    def test_find_points_called_correctly(self, PDA):
+        """Tests find_points called with correct arguments"""
+        PDA.build_query_plan(topic="topic")
+        PDA.equipment_tree.find_points.assert_called_once_with("topic", None, None)
+
+    def test_get_remote_called_correctly(self, PDA):
+        """Tests get_remote called with correct point identifier."""
+        PDA.build_query_plan(topic="topic")
+        PDA.equipment_tree.get_remote.assert_called_once_with('point1')
+
+    def test_build_query_plan_result(self, PDA):
+        """Tests build_query_plan returns correct result."""
+        result = PDA.build_query_plan(topic="topic")
+
+        expected_result = dict()
+        expected_result[PDA.driver_agent_mock] = {PDA.point_node_mock}
+        assert result == expected_result
 
 class TestPlatformDriverAgentGet:
     """Tests for get."""
@@ -936,7 +964,7 @@ class TestHandleRevertDevice:
     topic = "devices/actuators/revert/device/device1"
 
     @pytest.fixture
-    def agent(self):
+    def PDA(self):
         agent = PlatformDriverAgent()
 
         agent._get_headers = Mock(return_value={})
@@ -954,24 +982,24 @@ class TestHandleRevertDevice:
 
         return agent, mock_node, mock_remote
 
-    def test_handle_revert_device_success(self, agent):
+    def test_handle_revert_device_success(self, PDA):
         """Test reverting a device successfully."""
-        agent_instance, mock_node, mock_remote = agent
-        agent_instance.handle_revert_device(None, self.sender, None, self.topic, None, None)
+        agent, mock_node, mock_remote = PDA
+        agent.handle_revert_device(None, self.sender, None, self.topic, None, None)
 
 
         expected_topic = "devices/device1"
-        headers = agent_instance._get_headers(self.sender)
+        headers = agent._get_headers(self.sender)
 
-        agent_instance.equipment_tree.get_node.assert_called_with(expected_topic)
-        agent_instance.equipment_tree.raise_on_locks.assert_called_with(mock_node, self.sender)
+        agent.equipment_tree.get_node.assert_called_with(expected_topic)
+        agent.equipment_tree.raise_on_locks.assert_called_with(mock_node, self.sender)
         mock_remote.revert_all.assert_called_once()
-        agent_instance._push_result_topic_pair.assert_called_with("devices/actuators/reverted/device", expected_topic, headers, None)
-        agent_instance._handle_error.assert_not_called()
+        agent._push_result_topic_pair.assert_called_with("devices/actuators/reverted/device", expected_topic, headers, None)
+        agent._handle_error.assert_not_called()
 
-    def test_handle_revert_device_exception(self, agent):
+    def test_handle_revert_device_exception(self, PDA):
         """Test handling exception during revert process """
-        agent_instance, mock_node, mock_remote = agent
+        agent_instance, mock_node, mock_remote = PDA
         exception = Exception("test exception")
         agent_instance.equipment_tree.get_node.side_effect = exception
         agent_instance.handle_revert_device(None, self.sender, None, self.topic, None, None)
@@ -982,46 +1010,55 @@ class TestHandleRevertDevice:
         agent_instance.equipment_tree.get_node.assert_called_with(expected_topic)
         agent_instance._handle_error.assert_called_with(exception, expected_topic, headers)
 
+
 class TestHandleReservationRequest:
-    pass # TODO create tests
+    @pytest.fixture
+    def PDA(self):
+        """Fixture to set up a PlatformDriverAgent with necessary mocks."""
+        agent = PlatformDriverAgent()
+        agent._get_headers = Mock()
+        agent.reservation_manager = Mock()
+        agent.vip.pubsub.publish = Mock()
+        return agent
+
 
 class TestEquipmentId:
     """ Tests for _equipment_id in the PlatFromDriveragent class"""
 
     @pytest.fixture
-    def agent(self):
+    def PDA(self):
         """Fixture to set up a PlatformDriverAgent with a mocked equipment_tree."""
         agent = PlatformDriverAgent()
         agent.equipment_tree = Mock()
         agent.equipment_tree.root = "devices"
         return agent
 
-    def test_equipment_id_basic(self, agent):
-        result = agent._equipment_id("some/path", "point")
+    def test_equipment_id_basic(self, PDA):
+        result = PDA._equipment_id("some/path", "point")
         assert result == "devices/some/path/point"
 
-    def test_equipment_id_no_point(self, agent):
-        result = agent._equipment_id("some/path")
+    def test_equipment_id_no_point(self, PDA):
+        result = PDA._equipment_id("some/path")
         assert result == "devices/some/path"
 
-    def test_equipment_id_leading_trailing_slashes(self, agent):
-        result = agent._equipment_id("/some/path/", "point")
+    def test_equipment_id_leading_trailing_slashes(self, PDA):
+        result = PDA._equipment_id("/some/path/", "point")
         assert result == "devices/some/path/point"
 
-    def test_equipment_id_no_point_leading_trailing_slashes(self, agent):
-        result = agent._equipment_id("/some/path/")
+    def test_equipment_id_no_point_leading_trailing_slashes(self, PDA):
+        result = PDA._equipment_id("/some/path/")
         assert result == "devices/some/path"
 
-    def test_equipment_id_path_with_root(self, agent):
-        result = agent._equipment_id("devices/some/path", "point")
+    def test_equipment_id_path_with_root(self, PDA):
+        result = PDA._equipment_id("devices/some/path", "point")
         assert result == "devices/some/path/point"
 
-    def test_equipment_id_path_with_root_no_point(self, agent):
-        result = agent._equipment_id("devices/some/path")
+    def test_equipment_id_path_with_root_no_point(self, PDA):
+        result = PDA._equipment_id("devices/some/path")
         assert result == "devices/some/path"
 
-    def test_equipment_id_only_path(self, agent):
-        result = agent._equipment_id("some/path")
+    def test_equipment_id_only_path(self, PDA):
+        result = PDA._equipment_id("some/path")
         assert result == "devices/some/path"
 
 
