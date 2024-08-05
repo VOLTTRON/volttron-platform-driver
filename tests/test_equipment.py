@@ -94,3 +94,6 @@ class TestEquipmentTreeAddSegment():
         assert nid == "devices/building/floor"
         assert "devices/building" in equipment_tree.nodes
         assert "devices/building/floor" in equipment_tree.nodes
+
+if __name__ == '__main__':
+    pytest.main()
