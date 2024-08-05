@@ -44,3 +44,5 @@ class TestStaticCyclicPollScheduler:
         assert combined[5] == {point1, point2, point4}  # Properly combined sets
         assert combined[10] == {point3}
         assert len(combined[15]) == 1  # One point in poll_set2 for interval 15
+
+    # TODO create tests for separate_coprimes
