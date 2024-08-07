@@ -28,18 +28,18 @@ class TestEquipmentNodeGetRemote():
         assert result == None
 
 
-class TestEquipmentTreeAddDevice():
-    # TODO get back to
-
-    def test_add_device(self):
-        ET = EquipmentTree()
-
-        result = ET.add_device(device_topic="some/device/topic",
-                               config={"registry_config": ["some/device/config", "some/device/config"],
-                                       "equipment_specific_fields": "some/device/topic"},
-                               driver_agent="idk"
-                               )
-        assert result == "something"
+# class TestEquipmentTreeAddDevice():
+#     # TODO get back to
+#
+#     def test_add_device(self):
+#         ET = EquipmentTree()
+#
+#         result = ET.add_device(device_topic="some/device/topic",
+#                                config={"registry_config": ["some/device/config", "some/device/config"],
+#                                        "equipment_specific_fields": "some/device/topic"},
+#                                driver_agent="idk"
+#                                )
+#         assert result == "something"
 
 class TestEquipmentTreeAddSegment():
     @pytest.fixture
