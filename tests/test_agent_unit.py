@@ -171,18 +171,22 @@ from datetime import datetime
 #         pass
 #########
 
+
 class TestPlatformDriverAgentLoadVersionedConfig:
+
     @pytest.fixture
     def PDA(self):
         PDA = PlatformDriverAgent()
         PDA.core = Mock()
         PDA.vip = Mock()
         return PDA
+
     def test_load_empty_config(self, PDA):
         """Test loading an empty config."""
         config = {}
         result = PDA._load_versioned_config(config)
         assert result.config_version == 1
+
     def test_loading_based_on_version(self, PDA):
         """Tests loading a config based on version."""
         # Load v1 this also tests using a version less than the current version
@@ -195,12 +199,15 @@ class TestPlatformDriverAgentLoadVersionedConfig:
         result_v2 = PDA._load_versioned_config(config_v2)
         assert result_v2.config_version == 2
         assert result_v2.publish_depth_first_any == True
+
     def test_deprecation_warning_for_old_config_versions(self, PDA, caplog):
         config_old_version = {'config_version': 1}
         result = PDA._load_versioned_config(config_old_version)
         assert "Deprecation Warning" in caplog.text
 
+
 class TestPlatformDriverAgentConfigureMain:
+
     @pytest.fixture
     def PDA(self):
         from platform_driver.agent import PlatformDriverAgent
@@ -215,28 +222,34 @@ class TestPlatformDriverAgentConfigureMain:
         agent.scalability_test = Mock()
         return agent
 
+
 class TestPlatformDriverAgentConfigureNewEquipment:
     """Tests for _configure_new_equipment."""
     # TODO wait for function to be fully finished
     pass
+
 
 class TestPlatformDriverAgentGetOrCreateRemote:
     """Tests for _get_or_create_remote"""
     # TODO wait for function to be fully finished
     pass
 
+
 class TestPlatformDriverAgentUpdateEquipment:
     """Tests for _update_equipment."""
     # TODO wait for function to be fully finished
     pass
+
 
 class TestPlatformDriverAgentRemoveEquipment:
     """Tests for remove_equipment."""
     # TODO wait for function to be fully finished
     pass
 
+
 class TestPlatformDriverAgentResolveTags:
     """Tests for resolve_tags"""
+
     @pytest.fixture
     def PDA(self):
         agent = PlatformDriverAgent()
@@ -309,12 +322,14 @@ class TestPlatformDriverAgentBuildQueryPlan:
         expected_result[PDA.driver_agent_mock] = {PDA.point_node_mock}
         assert result == expected_result
 
+
 class TestPlatformDriverAgentGet:
     """Tests for get."""
+
     @pytest.fixture
     def PDA(self):
         PDA = PlatformDriverAgent()
-        PDA.vip = MagicMock()  # Mock vip if needed
+        PDA.vip = MagicMock()
         PDA.equipment_tree = MagicMock()
         return PDA
 
@@ -334,15 +349,9 @@ class TestPlatformDriverAgentGet:
         point_mock = MagicMock(identifier="point")
 
         # Mock the build_query_plan to return a predefined query plan
-        PDA.build_query_plan = MagicMock(return_value={
-            remote_mock: {point_mock}
-        })
+        PDA.build_query_plan = MagicMock(return_value={remote_mock: {point_mock}})
 
-        # mock
-        remote_mock.get_multiple_points.return_value = (
-            {"point": "value"},
-            {"point_err": "error"}
-        )
+        remote_mock.get_multiple_points.return_value = ({"point": "value"}, {"point_err": "error"})
 
         PDA.equipment_tree.get_node.return_value = None
 
@@ -355,13 +364,16 @@ class TestPlatformDriverAgentGet:
         PDA.build_query_plan.assert_called_once_with("topic", "regex", "tag")
         remote_mock.get_multiple_points.assert_called_once_with(["point"])
 
+
 class TestPlatformDriverAgentSet:
     """Tests for set"""
-    pass # TODO wait for final additions
+    pass    # TODO wait for final additions
+
 
 class TestPlatformDriverAgentRevert:
     """Tests for revert"""
-    pass # TODO wait for final additions
+    pass    # TODO wait for final additions
+
 
 class TestPlatformDriverAgentLast:
     """Tests for Last"""
@@ -376,13 +388,13 @@ class TestPlatformDriverAgentLast:
 
     def test_last_default(self, PDA):
         """Test last method with default arguments."""
-        point_mock = MagicMock(topic="point1", last_value="value1", last_updated="2023-01-01T00:00:00Z")
+        point_mock = MagicMock(topic="point1",
+                               last_value="value1",
+                               last_updated="2023-01-01T00:00:00Z")
         PDA.equipment_tree.find_points.return_value = [point_mock]
 
         result = PDA.last(topic="topic")
-        expected = {
-            "point1": {"value": "value1", "updated": "2023-01-01T00:00:00Z"}
-        }
+        expected = {"point1": {"value": "value1", "updated": "2023-01-01T00:00:00Z"}}
         assert result == expected
         PDA.equipment_tree.find_points.assert_called_once_with("topic", None, None)
 
@@ -398,6 +410,7 @@ class TestPlatformDriverAgentLast:
         assert point_mock.active is True
         PDA.poll_scheduler.schedule.assert_called_once()
         PDA.poll_scheduler.add_to_schedule.assert_not_called()
+
 
 class TestPlatformDriverAgentStart:
     """Tests for Start"""
@@ -459,6 +472,7 @@ class TestPlatformDriverAgentStart:
         PDA.poll_scheduler.schedule.assert_not_called()
         PDA.poll_scheduler.add_to_schedule.assert_called_once_with(point_mock)
 
+
 class TestPlatformDriverAgentStop:
     """Tests for Stop"""
 
@@ -519,7 +533,9 @@ class TestPlatformDriverAgentStop:
         PDA.poll_scheduler.schedule.assert_not_called()
         PDA.poll_scheduler.remove_from_schedule.assert_called_once_with(point_mock)
 
+
 class TestPlatformDriverAgentEnable:
+
     @pytest.fixture
     def PDA(self):
         agent = PlatformDriverAgent()
@@ -546,7 +562,9 @@ class TestPlatformDriverAgentEnable:
 
         PDA.equipment_tree.find_points.assert_called_once_with("topic", None, None)
         assert node_mock.config['active'] is True
-        PDA.vip.config.set.assert_called_once_with(node_mock.topic, node_mock.config, trigger_callback=False)
+        PDA.vip.config.set.assert_called_once_with(node_mock.topic,
+                                                   node_mock.config,
+                                                   trigger_callback=False)
         PDA.equipment_tree.get_device_node.assert_not_called()
 
     def test_enable_point_nodes(self, PDA):
@@ -564,8 +582,10 @@ class TestPlatformDriverAgentEnable:
         device_node_mock.update_registry_row.assert_called_once_with(node_mock.config)
         PDA.vip.config.set.assert_not_called()
 
+
 class TestPlatformDriverAgentDisable:
     """ Tests for disable function"""
+
     @pytest.fixture
     def PDA(self):
         agent = PlatformDriverAgent()
@@ -592,7 +612,9 @@ class TestPlatformDriverAgentDisable:
 
         PDA.equipment_tree.find_points.assert_called_once_with("topic", None, None)
         assert node_mock.config['active'] is False
-        PDA.vip.config.set.assert_called_once_with(node_mock.topic, node_mock.config, trigger_callback=False)
+        PDA.vip.config.set.assert_called_once_with(node_mock.topic,
+                                                   node_mock.config,
+                                                   trigger_callback=False)
         PDA.equipment_tree.get_device_node.assert_not_called()
 
     def test_disable_point_nodes(self, PDA):
@@ -610,6 +632,7 @@ class TestPlatformDriverAgentDisable:
         device_node_mock.update_registry_row.assert_called_once_with(node_mock.config)
         PDA.vip.config.set.assert_not_called()
 
+
 class TestPlatformDriverAgentNewReservation:
     """ Tests for new reservation """
 
@@ -625,9 +648,11 @@ class TestPlatformDriverAgentNewReservation:
     def test_new_reservation(self, PDA):
         PDA.new_reservation(task_id="task1", priority="LOW", requests=[])
 
-        PDA.reservation_manager.new_reservation.assert_called_once_with(
-            "test.agent", "task1", "LOW", [], publish_result=False
-        )
+        PDA.reservation_manager.new_reservation.assert_called_once_with("test.agent",
+                                                                        "task1",
+                                                                        "LOW", [],
+                                                                        publish_result=False)
+
 
 class TestHandleSet:
     sender = "test.agent"
@@ -657,10 +682,12 @@ class TestHandleSet:
         PDA._push_result_topic_pair = Mock()
         PDA.get_point = Mock()
         return PDA
+
     def test_handle_set_calls_set_point_with_correct_parameters(self, PDA):
         """Test handle_set calls set_point with correct parameters"""
         PDA.handle_set(None, self.sender, None, self.topic, None, self.message)
         PDA.set_point.assert_called_with("device1/SampleWritableFloat1", None, self.message)
+
 
 class TestHandleGet:
     sender = "test.agent"
@@ -688,16 +715,19 @@ class TestHandleGet:
         PDA.get_point = Mock()
 
         return PDA
+
     def test_handle_get_calls_get_point_with_correct_parameters(self, PDA):
         """Test handle_get calls get_point with correct parameters."""
         PDA.handle_get(None, self.sender, None, self.topic, None, None)
         PDA.get_point.assert_called_with("device1/SampleWritableFloat1")
+
 
 class TestGetPoint:
     sender = "test.agent"
     path = "devices/device1"
     point_name = "SampleWritableFloat1"
     value = 0.2
+
     @pytest.fixture
     def PDA(self):
         PDA = PlatformDriverAgent()
@@ -722,33 +752,39 @@ class TestGetPoint:
         PDA._push_result_topic_pair = Mock()
 
         return PDA
+
     def test_get_point_calls_equipment_id_with_correct_parameters(self, PDA):
         """Test get_point calls equipment_id method with correct parameters."""
         PDA.get_point(path='device/topic', point_name='SampleWritableFloat', kwargs={})
         # Assert that self._equipment_id was called with the correct arguments
         PDA._equipment_id.assert_called_with("device/topic", "SampleWritableFloat")
+
     def test_get_point_with_topic_kwarg(self, PDA):
         """Test handling of 'topic' as keyword arg"""
         kwargs = {'topic': 'device/topic'}
         PDA.get_point(path=None, point_name=None, **kwargs)
         PDA._equipment_id.assert_called_with('device/topic', None)
+
     def test_get_point_with_point_kwarg(self, PDA):
         """ Test handling of 'point' keyword arg """
         kwargs = {'point': 'SampleWritableFloat'}
         PDA.get_point(path='device/topic', point_name=None, **kwargs)
         PDA._equipment_id.assert_called_with('device/topic', 'SampleWritableFloat')
+
     def test_get_point_with_combined_path_and_empty_point(self, PDA):
         """Test handling of path containing the point name and point_name is empty"""
         # TODO again, is it supposed to get rid of None? does it still work?
         kwargs = {}
         PDA.get_point(path='device/topic/SampleWritableFloat', point_name=None, **kwargs)
         PDA._equipment_id.assert_called_with("device/topic/SampleWritableFloat", None)
+
     def test_get_point_raises_error_for_invalid_node(self, PDA):
         """Test get_point raises error when node is invalid"""
         PDA.equipment_tree.get_node.return_value = None
         kwargs = {}
         with pytest.raises(ValueError, match="No equipment found for topic: processed_point_name"):
             PDA.get_point(path='device/topic', point_name='SampleWritableFloat', **kwargs)
+
     def test_get_point_raises_error_for_invalid_remote(self, PDA):
         """Test get_point raises error when remote is invalid"""
         # Ensure get_node returns a valid node mock
@@ -759,7 +795,8 @@ class TestGetPoint:
         kwargs = {}
 
         with pytest.raises(ValueError, match="No remote found for topic: processed_point_name"):
-            PDA.get_point(path = 'device/topic', point_name = 'SampleWritableFloat', **kwargs)
+            PDA.get_point(path='device/topic', point_name='SampleWritableFloat', **kwargs)
+
     def test_get_point_with_kwargs_as_topic_point(self, PDA):
         """Test handling of old actuator-style arguments"""
 
@@ -768,16 +805,19 @@ class TestGetPoint:
         result = PDA.get_point(path=None, point_name=None, **kwargs)
 
         PDA._equipment_id.assert_called_with('device/topic', 'SampleWritableFloat')
+
     def test_get_point_old_style_call(self, PDA):
         """Test get point with old actuator style call"""
         kwargs = {}
         PDA.get_point(topic='device/topic', point="SampleWritableFloat", **kwargs)
         PDA._equipment_id.assert_called_with("device/topic", "SampleWritableFloat")
+
     def test_get_point_old_style_call_with_kwargs(self, PDA):
         """Test get point with old actuator style call and with kwargs"""
         kwargs = {"random_thing": "test"}
         PDA.get_point(topic='device/topic', point="SampleWritableFloat", **kwargs)
         PDA._equipment_id.assert_called_with("device/topic", "SampleWritableFloat")
+
 
 class TestSetPoint:
     sender = "test.agent"
@@ -812,24 +852,27 @@ class TestSetPoint:
 
     def test_set_point_calls_equipment_id_with_correct_parameters(self, PDA):
         """Test set_point calls equipment_id method with correct parameters."""
-        PDA.set_point(path = 'device/topic', point_name = 'SampleWritableFloat', value = 42, kwargs = {})
+        PDA.set_point(path='device/topic', point_name='SampleWritableFloat', value=42, kwargs={})
         # Assert that self._equipment_id was called with the correct arguments
         PDA._equipment_id.assert_called_with("device/topic", "SampleWritableFloat")
+
     def test_set_point_with_topic_kwarg(self, PDA):
         """Test handling of 'topic' as keyword arg"""
         kwargs = {'topic': 'device/topic'}
-        PDA.set_point(path = 'ignored_path', point_name = None, value = 42, **kwargs)
+        PDA.set_point(path='ignored_path', point_name=None, value=42, **kwargs)
         PDA._equipment_id.assert_called_with('device/topic', None)
+
     def test_set_point_with_point_kwarg(self, PDA):
         """ Test handling of 'point' keyword arg """
         kwargs = {'point': 'SampleWritableFloat'}
-        PDA.set_point(path = 'device/topic', point_name = None, value = 42, **kwargs)
+        PDA.set_point(path='device/topic', point_name=None, value=42, **kwargs)
         PDA._equipment_id.assert_called_with('device/topic', 'SampleWritableFloat')
+
     def test_set_point_with_combined_path_and_empty_point(self, PDA):
         """Test handling of path containing the point name and point_name is empty"""
         # TODO is this expected? to call it with None? it does not use the path with the point name when point name is none?
         kwargs = {}
-        PDA.set_point(path = 'device/topic/SampleWritableFloat', point_name = None, value = 42, **kwargs)
+        PDA.set_point(path='device/topic/SampleWritableFloat', point_name=None, value=42, **kwargs)
         PDA._equipment_id.assert_called_with("device/topic/SampleWritableFloat", None)
 
     def test_set_point_raises_error_for_invalid_node(self, PDA):
@@ -839,7 +882,11 @@ class TestSetPoint:
 
         # Call the set_point function and check for ValueError
         with pytest.raises(ValueError, match="No equipment found for topic: processed_point_name"):
-            PDA.set_point(path = 'device/topic', point_name = 'SampleWritableFloat', value = 42, **kwargs)
+            PDA.set_point(path='device/topic',
+                          point_name='SampleWritableFloat',
+                          value=42,
+                          **kwargs)
+
     def test_set_point_deprecated(self, PDA):
         """Test old style actuator call"""
         PDA.set_point("ilc.agnet", 'device/topic', 42, 'SampleWritableFloat', {})
@@ -848,6 +895,7 @@ class TestSetPoint:
         # Assert that self._equipment_id was called with the correct arguments
         # TODO this should be the same as the test above it but for some reason its not.
         PDA._equipment_id.assert_called_with(("device/topic", "SampleWritableFloat"), None)
+
 
 class TestGetMultiplePoints:
     sender = "test.agent"
@@ -860,7 +908,7 @@ class TestGetMultiplePoints:
         PDA.vip.rpc.context = MagicMock()
         PDA.vip.rpc.context.vip_message.peer = self.sender
 
-        PDA._equipment_id = Mock(side_effect={'device1/point2', 'device1/point1'},)
+        PDA._equipment_id = Mock(side_effect={'device1/point2', 'device1/point1'}, )
 
         PDA.get = Mock(return_value=({}, {}))
 
@@ -886,6 +934,7 @@ class TestGetMultiplePoints:
 
         PDA.get.assert_not_called()
 
+
 class TestSetMultiplePoints:
     sender = "test.agent"
 
@@ -897,18 +946,22 @@ class TestSetMultiplePoints:
         PDA.vip.rpc.context = MagicMock()
         PDA.vip.rpc.context.vip_message.peer = self.sender
 
-        PDA._equipment_id = Mock(side_effect=['device1/point1', 'device1/point2', 'device2/point1'])
+        PDA._equipment_id = Mock(
+            side_effect=['device1/point1', 'device1/point2', 'device2/point1'])
 
         PDA.set = Mock(return_value=(None, {}))
 
         return PDA
 
-
     def test_set_multiple_points_with_single_path(self, PDA):
         """Test set_multiple_points with a single path and point names/values"""
         point_names_values = [('point1', 100), ('point2', 200)]
         PDA.set_multiple_points(path='device1', point_names_values=point_names_values)
-        PDA.set.assert_called_once_with({'device1/point1': 100, 'device1/point2': 200}, map_points=True)
+        PDA.set.assert_called_once_with({
+            'device1/point1': 100,
+            'device1/point2': 200
+        },
+                                        map_points=True)
         PDA._equipment_id.assert_any_call('device1', 'point1')
         PDA._equipment_id.assert_any_call('device1', 'point2')
 
@@ -923,15 +976,20 @@ class TestSetMultiplePoints:
         """Test set_multiple_points with additional kwargs"""
         point_names_values = [('point1', 100), ('point2', 200)]
         additional_kwargs = {'some_key': 'some_value'}
-        PDA.set_multiple_points(path='device1', point_names_values=point_names_values, **additional_kwargs)
-        PDA.set.assert_called_once_with({'device1/point1': 100, 'device1/point2': 200},
+        PDA.set_multiple_points(path='device1',
+                                point_names_values=point_names_values,
+                                **additional_kwargs)
+        PDA.set.assert_called_once_with({
+            'device1/point1': 100,
+            'device1/point2': 200
+        },
                                         map_points=True,
                                         some_key='some_value')
         PDA._equipment_id.assert_any_call('device1', 'point1')
         PDA._equipment_id.assert_any_call('device1', 'point2')
 
     def test_set_multiple_with_old_style_args(self, PDA):
-        pass #TODO have david explain again - how are they different?
+        pass    #TODO have david explain again - how are they different?
 
 
 class TestRevertPoint:
@@ -970,7 +1028,9 @@ class TestRevertPoint:
 
         # PDA._equipment_id.assert_called_with(self.path, self.point_name) # TODO not sure why this is not working
         PDA.equipment_tree.get_node.assert_called_with("devices/device1/SampleWritableFloat1")
-        PDA.equipment_tree.get_node().get_remote.return_value.revert_point.assert_called_with("devices/device1/SampleWritableFloat1")
+        PDA.equipment_tree.get_node().get_remote.return_value.revert_point.assert_called_with(
+            "devices/device1/SampleWritableFloat1")
+
 
 class TestRevertDevice:
     sender = "test.agent"
@@ -1069,7 +1129,8 @@ class TestHandleSet:
         headers = PDA._get_headers(self.sender)
         error = {'type': 'ValueError', 'value': 'missing argument'}
 
-        PDA._push_result_topic_pair.assert_called_with("devices/actuators/error", point, headers, error)
+        PDA._push_result_topic_pair.assert_called_with("devices/actuators/error", point, headers,
+                                                       error)
         PDA.set_point.assert_not_called()
         PDA._handle_error.assert_not_called()
 
@@ -1109,8 +1170,8 @@ class TestHandleRevertPoint:
         agent_instance.equipment_tree.get_node.assert_called_with(expected_topic)
         agent_instance.equipment_tree.raise_on_locks.assert_called_with(mock_node, self.sender)
         mock_remote.revert_point.assert_called_with(expected_topic)
-        agent_instance._push_result_topic_pair.assert_called_with("devices/actuators/reverted/point", expected_topic,
-                                                                  headers, None)
+        agent_instance._push_result_topic_pair.assert_called_with(
+            "devices/actuators/reverted/point", expected_topic, headers, None)
         agent_instance._handle_error.assert_not_called()
 
     def test_handle_revert_point_exception(self, PDA):
@@ -1125,6 +1186,7 @@ class TestHandleRevertPoint:
 
         agent_instance.equipment_tree.get_node.assert_called_with(expected_topic)
         agent_instance._handle_error.assert_called_with(exception, expected_topic, headers)
+
 
 class TestHandleRevertDevice:
     sender = "test.sender"
@@ -1154,14 +1216,14 @@ class TestHandleRevertDevice:
         agent, mock_node, mock_remote = PDA
         agent.handle_revert_device(None, self.sender, None, self.topic, None, None)
 
-
         expected_topic = "devices/device1"
         headers = agent._get_headers(self.sender)
 
         agent.equipment_tree.get_node.assert_called_with(expected_topic)
         agent.equipment_tree.raise_on_locks.assert_called_with(mock_node, self.sender)
         mock_remote.revert_all.assert_called_once()
-        agent._push_result_topic_pair.assert_called_with("devices/actuators/reverted/device", expected_topic, headers, None)
+        agent._push_result_topic_pair.assert_called_with("devices/actuators/reverted/device",
+                                                         expected_topic, headers, None)
         agent._handle_error.assert_not_called()
 
     def test_handle_revert_device_exception(self, PDA):
@@ -1179,6 +1241,7 @@ class TestHandleRevertDevice:
 
 
 class TestHandleReservationRequest:
+
     @pytest.fixture
     def PDA(self):
         """Fixture to set up a PlatformDriverAgent with necessary mocks."""
@@ -1229,7 +1292,6 @@ class TestEquipmentId:
         assert result == "devices/some/path"
 
 
-
 class TestGetHeaders:
     """Tests for _get_headers in the PlatformDriverAgent class."""
 
@@ -1253,7 +1315,12 @@ class TestGetHeaders:
         now = get_aware_utc_now()
         formatted_now = format_timestamp(now)
         result = PlatformDriverAgent()._get_headers(requester, time=now, task_id=task_id)
-        assert result == {'time': formatted_now, 'requesterID': requester, 'taskID': task_id, 'type': None}
+        assert result == {
+            'time': formatted_now,
+            'requesterID': requester,
+            'taskID': task_id,
+            'type': None
+        }
 
     def test_get_headers_with_action_type(self):
         requester = "test_requester"
@@ -1269,8 +1336,17 @@ class TestGetHeaders:
         formatted_custom_time = format_timestamp(custom_time)
         task_id = "task123"
         action_type = "NEW_SCHEDULE"
-        result = PlatformDriverAgent()._get_headers(requester, time=custom_time, task_id=task_id, action_type=action_type)
-        assert result == {'time': formatted_custom_time, 'requesterID': requester, 'taskID': task_id, 'type': action_type}
+        result = PlatformDriverAgent()._get_headers(requester,
+                                                    time=custom_time,
+                                                    task_id=task_id,
+                                                    action_type=action_type)
+        assert result == {
+            'time': formatted_custom_time,
+            'requesterID': requester,
+            'taskID': task_id,
+            'type': action_type
+        }
+
 
 if __name__ == '__main__':
     pytest.main()
