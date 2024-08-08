@@ -6,6 +6,7 @@ from platform_driver.agent import PlatformDriverAgent
 
 
 class TestStaticCyclicPollScheduler:
+
     @pytest.fixture
     def scheduler(self):
         agent_mock = Mock(spec=PlatformDriverAgent)
@@ -15,7 +16,7 @@ class TestStaticCyclicPollScheduler:
         intervals = [4, 5, 6]
         minimum_polling_interval = 1
         result = scheduler.calculate_hyper_period(intervals, minimum_polling_interval)
-        assert result == 60  # LCM of 4, 5, 6 is 60
+        assert result == 60    # LCM of 4, 5, 6 is 60
 
     def test_prepare_to_schedule(self, scheduler):
         remote_mock = Mock()
@@ -41,8 +42,8 @@ class TestStaticCyclicPollScheduler:
 
         combined = scheduler._combine_poll_sets(poll_sets)
         assert set(combined.keys()) == {5, 10, 15}
-        assert combined[5] == {point1, point2, point4}  # Properly combined sets
+        assert combined[5] == {point1, point2, point4}    # Properly combined sets
         assert combined[10] == {point3}
-        assert len(combined[15]) == 1  # One point in poll_set2 for interval 15
+        assert len(combined[15]) == 1    # One point in poll_set2 for interval 15
 
-    # TODO create tests for separate_coprimes
+    # TODO create tests for separate_coprimes staticmethod
