@@ -1,7 +1,6 @@
 import pytest
 
 from platform_driver.equipment import EquipmentTree, EquipmentNode
-from mock import MagicMock, Mock
 
 
 class TestEquipmentNodeGetRemote():
@@ -41,7 +40,9 @@ class TestEquipmentNodeGetRemote():
 #                                )
 #         assert result == "something"
 
+
 class TestEquipmentTreeAddSegment():
+
     @pytest.fixture
     def equipment_tree(self):
         return EquipmentTree()
@@ -94,6 +95,7 @@ class TestEquipmentTreeAddSegment():
         assert nid == "devices/building/floor"
         assert "devices/building" in equipment_tree.nodes
         assert "devices/building/floor" in equipment_tree.nodes
+
 
 if __name__ == '__main__':
     pytest.main()
