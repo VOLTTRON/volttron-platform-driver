@@ -26,13 +26,15 @@ class TestTimeSliceStretchToInclude:
 
     def test_extend_before_start(self):
         ts = TimeSlice(start=self.now + timedelta(hours=2), end=self.now + timedelta(hours=3))
-        time_slice = TimeSlice(start=self.now + timedelta(hours=1), end=self.now + timedelta(hours=2))
+        time_slice = TimeSlice(start=self.now + timedelta(hours=1),
+                               end=self.now + timedelta(hours=2))
         ts.stretch_to_include(time_slice)
         assert ts.start == time_slice.start, "start should be updated to time_slice's start"
 
     def test_extend_after_end(self):
         ts = TimeSlice(start=self.now - timedelta(hours=2), end=self.now)
-        time_slice = TimeSlice(start=self.now - timedelta(hours=2), end=self.now + timedelta(hours=2))
+        time_slice = TimeSlice(start=self.now - timedelta(hours=2),
+                               end=self.now + timedelta(hours=2))
         ts.stretch_to_include(time_slice)
         assert ts.end == time_slice.end, "end should be updated to time_slice's end"
 
@@ -42,11 +44,14 @@ class TestTimeSliceStretchToInclude:
         ts.stretch_to_include(new_ts)
         assert ts.start == self.now, "start should remain the same"
         assert ts.end == self.now + timedelta(hours=4), "end should remain the same"
+
+
 class TestTaskPopulateReservation:
-    requests = [
-        ["device1", datetime(2022, 1, 1, 12, 0), datetime(2022, 1, 1, 13, 0)],
-        ["device2", datetime(2022, 1, 1, 14, 0), datetime(2022, 1, 1, 15, 0)]
-    ]
+    requests = [["device1", datetime(2022, 1, 1, 12, 0),
+                 datetime(2022, 1, 1, 13, 0)],
+                ["device2", datetime(2022, 1, 1, 14, 0),
+                 datetime(2022, 1, 1, 15, 0)]]
+
     @pytest.fixture
     def task(self):
         return Task(agent_id="test_agent", priority="HIGH", requests=[])
@@ -61,23 +66,24 @@ class TestTaskPopulateReservation:
     def test_populate_reservation_device_not_string(self, task):
         """ Tests calling populate reservation with device as non string"""
         requests = [
-            # device is a bool instead of a true
-            [True, datetime(2022, 1, 1, 12, 0), datetime(2022, 1, 1, 13, 0)],
-            ["device2", datetime(2022, 1, 1, 14, 0), datetime(2022, 1, 1, 15, 0)]
+        # device is a bool instead of a true
+            [True, datetime(2022, 1, 1, 12, 0),
+             datetime(2022, 1, 1, 13, 0)],
+            ["device2", datetime(2022, 1, 1, 14, 0),
+             datetime(2022, 1, 1, 15, 0)]
         ]
         with pytest.raises(ValueError, match="Device not string."):
             task.populate_reservation(requests)
 
+
 class TestTaskMakeCurrent:
+
     @pytest.fixture
     def task(self):
         # Create a Task instance with mock reservations and a set time slice.
         task = Task(agent_id="test_agent", priority="HIGH", requests=[])
         # Mocking device reservations within the task
-        task.devices = {
-            'device1': MagicMock(),
-            'device2': MagicMock()
-        }
+        task.devices = {'device1': MagicMock(), 'device2': MagicMock()}
         # our task is active starting NOW for 1 hour
         start_time = datetime.now()
         end_time = datetime.now() + timedelta(hours=1)
@@ -89,6 +95,7 @@ class TestTaskMakeCurrent:
         task.state = Task.STATE_FINISHED
         task.make_current(datetime.now())
         assert not task.devices, "Devices should be cleared when the task is finished."
+
     def test_remove_finished_reservations(self, task):
         """tests automatic removal of a device when task is finished and keeping of a non finished device"""
         now = datetime.now()
@@ -98,39 +105,43 @@ class TestTaskMakeCurrent:
         task.make_current(now)
         assert 'device1' not in task.devices, "device1 should be removed from task.devices."
         assert 'device2' in task.devices, "device2 should be in task.devices"
+
     def test_state_transition_to_pre_run(self, task):
         """Tests calling make current with a time before the task is set to start"""
-        past_time = datetime.now() - timedelta(hours=1) # one hour before task starts
+        past_time = datetime.now() - timedelta(hours=1)    # one hour before task starts
         task.make_current(past_time)
         assert task.state == Task.STATE_PRE_RUN, "task state should be in pre run"
+
     def test_state_transition_running(self, task):
         """Tests calling make current 30 minutes after it has started """
-        within_time = datetime.now() + timedelta(minutes=30) # 30 minutes after task has started
+        within_time = datetime.now() + timedelta(minutes=30)    # 30 minutes after task has started
         task.make_current(within_time)
         assert task.state == Task.STATE_RUNNING, "task state should be running"
+
     def test_state_transition_finished(self, task):
         """Tests calling make current with a time after the task is finished """
-        past_time = datetime.now() + timedelta(hours=2) # 1 hr after task was set to end
+        past_time = datetime.now() + timedelta(hours=2)    # 1 hr after task was set to end
         task.make_current(past_time)
         assert task.state == Task.STATE_FINISHED, "task state should be finished"
 
+
 class TestTaskGetCurrentSlot:
+
     @pytest.fixture
     def task(self):
         # Create a Task instance with mock reservations and a set time slice.
         task = Task(agent_id="test_agent", priority="HIGH", requests=[])
         # Mocking device reservations within the task
-        task.devices = {
-            'device1': MagicMock(),
-            'device2': MagicMock()
-        }
+        task.devices = {'device1': MagicMock(), 'device2': MagicMock()}
         return task
 
     def test_get_current_slots_during_active_time(self, task):
         """Tests return when two slots are active"""
         now = datetime.now()
-        task.devices['device1'].get_current_slot.return_value = TimeSlice(now, now + timedelta(minutes=30))
-        task.devices['device2'].get_current_slot.return_value = TimeSlice(now, now + timedelta(minutes=45))
+        task.devices['device1'].get_current_slot.return_value = TimeSlice(
+            now, now + timedelta(minutes=30))
+        task.devices['device2'].get_current_slot.return_value = TimeSlice(
+            now, now + timedelta(minutes=45))
 
         current_slots = task.get_current_slots(now)
 
@@ -151,7 +162,8 @@ class TestTaskGetCurrentSlot:
     def test_get_current_slots_with_mixed_active_and_inactive_slots(self, task):
         """Tests that get current slots returns correct slots when mixed"""
         now = datetime.now()
-        task.devices['device1'].get_current_slot.return_value = TimeSlice(now, now + timedelta(minutes=30))
+        task.devices['device1'].get_current_slot.return_value = TimeSlice(
+            now, now + timedelta(minutes=30))
         task.devices['device2'].get_current_slot.return_value = None
 
         current_slots = task.get_current_slots(now)
@@ -162,6 +174,7 @@ class TestTaskGetCurrentSlot:
 
 
 class TestTaskGetConflicts:
+
     @pytest.fixture
     def task(self):
         now = datetime.now()
@@ -171,10 +184,11 @@ class TestTaskGetConflicts:
         # starts now for 1 hour
         reservation1.time_slots.append(TimeSlice(start=now, end=now + timedelta(hours=1)))
         # starts in two hours and lasts for 1
-        reservation1.time_slots.append(TimeSlice(start=now + timedelta(hours=2), end=now + timedelta(hours=3)))
+        reservation1.time_slots.append(
+            TimeSlice(start=now + timedelta(hours=2), end=now + timedelta(hours=3)))
         task.devices = {
-            'device1': reservation1, # two time slots
-            'device2': Reservation() # empty reservation
+            'device1': reservation1,    # two time slots
+            'device2': Reservation()    # empty reservation
         }
         return task
 
@@ -183,9 +197,9 @@ class TestTaskGetConflicts:
         other_task = Task(agent_id="agent2", priority="LOW", requests=[])
         other_task.devices['device1'] = Reservation()
         other_task.devices['device1'].time_slots.append(
-            # starts in 4hrs and lasts for 1hr
-            TimeSlice(start=datetime.now() + timedelta(hours=4), end=datetime.now() + timedelta(hours=5))
-        )
+        # starts in 4hrs and lasts for 1hr
+            TimeSlice(start=datetime.now() + timedelta(hours=4),
+                      end=datetime.now() + timedelta(hours=5)))
 
         conflicts = task.get_conflicts(other_task)
         assert conflicts == [], "There should be no conflicts."
@@ -195,9 +209,9 @@ class TestTaskGetConflicts:
         other_task = Task(agent_id="agent2", priority="LOW", requests=[])
         other_task.devices['device1'] = Reservation()
         other_task.devices['device1'].time_slots.append(
-            # starts in 30 minutes (conflict with fixture) lasts for 1.5hrs
-            TimeSlice(start=datetime.now() + timedelta(minutes=30), end=datetime.now() + timedelta(hours=1, minutes=30))
-        )
+        # starts in 30 minutes (conflict with fixture) lasts for 1.5hrs
+            TimeSlice(start=datetime.now() + timedelta(minutes=30),
+                      end=datetime.now() + timedelta(hours=1, minutes=30)))
 
         conflicts = task.get_conflicts(other_task)
         assert len(conflicts) == 1, "There should be one conflict."
@@ -207,17 +221,19 @@ class TestTaskGetConflicts:
         other_task = Task(agent_id="agent2", priority="LOW", requests=[])
         other_task.devices['device1'] = Reservation()
         other_task.devices['device1'].time_slots.append(
-            # starts now and ends in 1 hour
-            TimeSlice(start=datetime.now(), end=datetime.now() + timedelta(hours=1))
-        )
+        # starts now and ends in 1 hour
+            TimeSlice(start=datetime.now(), end=datetime.now() + timedelta(hours=1)))
         # starts in two hours and lasts for 1 hour
         other_task.devices['device1'].time_slots.append(
-            TimeSlice(start=datetime.now() + timedelta(hours=2), end=datetime.now() + timedelta(hours=3))
-        )
+            TimeSlice(start=datetime.now() + timedelta(hours=2),
+                      end=datetime.now() + timedelta(hours=3)))
 
         conflicts = task.get_conflicts(other_task)
         assert len(conflicts) == 2, "There should be two conflicts"
+
+
 class TestTaskCheckCanPreemptOther:
+
     @pytest.fixture
     def high_priority_task(self):
         # Create a high priority task object in PRE_RUN state for basic setup.
@@ -250,7 +266,7 @@ class TestTaskCheckCanPreemptOther:
     def test_preemption_low_priority(self, low_priority_task, non_preemptable_high_priority_task):
         """Tests a low priority task trying to preempt a high priority task"""
         result = low_priority_task.check_can_preempt_other(non_preemptable_high_priority_task)
-        assert result== False, "Low priority task cannot preempt any task."
+        assert result == False, "Low priority task cannot preempt any task."
 
     def test_preemption_running_preemptable(self, high_priority_task, preemptable_task):
         """ tests a high priority task trying to preempt a preemptable low priority running task"""
@@ -269,12 +285,12 @@ class TestTaskCheckCanPreemptOther:
         result = high_priority_task.check_can_preempt_other(low_priority_task)
         assert result == True, "High priority should preempt low priority in FINISHED state."
 
+
 class TestTaskPreempt:
+
     @pytest.fixture
     def task(self):
-        requests = [
-            ["device1", datetime.now(), datetime.now() + timedelta(hours=1)]
-        ]
+        requests = [["device1", datetime.now(), datetime.now() + timedelta(hours=1)]]
         return Task(agent_id="test_agent", priority="HIGH", requests=requests)
 
     @pytest.fixture
@@ -302,7 +318,7 @@ class TestTaskPreempt:
         now = datetime.now()
         result = task.preempt(grace_time=timedelta(minutes=30), now=now)
         assert result == True
-        assert task.state == Task.STATE_PREEMPTED # preempt method converted
+        assert task.state == Task.STATE_PREEMPTED    # preempt method converted
         assert task.time_slice.start == now
         assert task.time_slice.end == now + timedelta(minutes=30)
 
@@ -323,25 +339,30 @@ class TestTaskPreempt:
         assert task.time_slice.start == now
         assert task.time_slice.end == now + timedelta(minutes=30)
 
+
 class TestTaskGetNextEventTime:
+
     @pytest.fixture
     def task(self):
         task = Task(agent_id="test_agent", priority="HIGH", requests=[])
         return task
+
     def test_no_reservations(self, task):
         """Test get_next_event_time returns None when there are no reservations."""
         now = datetime.now()
         assert task.get_next_event_time(now) is None
+
     def test_single_reservation(self, task):
         """Test with a single reservation."""
         now = datetime.now()
         reservation = Mock()
         # our reservation object is created from now to 10 mins from now.
         reservation.get_next_event_time.return_value = now + timedelta(minutes=10)
-        task.devices['device1'] = reservation # assign our new reservation to device1
+        task.devices['device1'] = reservation    # assign our new reservation to device1
 
         assert task.get_next_event_time(now) == now + timedelta(minutes=10)
         assert 'device1' in task.devices
+
     def test_multiple_reservations(self, task):
         """ Test with multiple reservations which should return the earliest event time"""
         now = datetime.now()
@@ -354,6 +375,7 @@ class TestTaskGetNextEventTime:
         task.devices['device2'] = reservation2
 
         assert task.get_next_event_time(now) == now + timedelta(minutes=10)
+
     def test_mixed_null_and_valid_times(self, task):
         """Test with mixed null and valid next event times."""
         now = datetime.now()
@@ -368,15 +390,19 @@ class TestTaskGetNextEventTime:
 
         assert task.get_next_event_time(now) == now + timedelta(minutes=20)
 
+
 class TestReservationCheckAvailability:
+
     @pytest.fixture
     def reservation(self):
         return Reservation()
+
     def test_empty_reservation_list(self, reservation):
         """Tests that empty reservation list returns empty set"""
         now = datetime.now()
         time_slot = TimeSlice(now, now + timedelta(hours=1))
-        assert reservation.check_availability(time_slot) == set(), "Should return an empty set for no conflicts."
+        assert reservation.check_availability(
+            time_slot) == set(), "Should return an empty set for no conflicts."
 
     def test_single_overlap(self, reservation):
         """ Tests that check availability correctly returns time slots affected by new overlapping times"""
@@ -386,19 +412,23 @@ class TestReservationCheckAvailability:
         reservation.time_slots.append(existing_time_slot)
 
         # Overlapping time slot
-        overlap_start = start_time + timedelta(hours=1)  #starts one hour into the existing slot
-        overlap_end = overlap_start + timedelta(hours=1)  # Ends one hour later
+        overlap_start = start_time + timedelta(hours=1)    #starts one hour into the existing slot
+        overlap_end = overlap_start + timedelta(hours=1)    # Ends one hour later
         new_time_slot = TimeSlice(overlap_start, overlap_end)
 
         available_slots = reservation.check_availability(new_time_slot)
 
         # check availability will return the time slots affected by the new time
-        assert available_slots == {existing_time_slot}, "Should detect the overlap with the existing time slot."
+        assert available_slots == {existing_time_slot
+                                   }, "Should detect the overlap with the existing time slot."
+
 
 class TestReservationMakeCurrent:
+
     @pytest.fixture
     def reservation(self):
         return Reservation()
+
     def test_make_current_no_time_slots(self, reservation):
         """Test making calling with no time slots"""
         now = datetime.now()
@@ -409,7 +439,7 @@ class TestReservationMakeCurrent:
         """Test calling make_current with a future time slot which should remain unchanged."""
         now = datetime.now()
         future_time_slot = TimeSlice(start=now + timedelta(hours=1), end=now + timedelta(hours=2))
-        reservation.time_slots.append(future_time_slot) # add times to time_slots
+        reservation.time_slots.append(future_time_slot)    # add times to time_slots
         reservation.make_current(now)
         assert len(reservation.time_slots) == 1, "Future time slots should not be removed."
 
@@ -433,7 +463,9 @@ class TestReservationMakeCurrent:
         assert len(reservation.time_slots) == 1 and reservation.time_slots[
             0] == future_time_slot, "Only past time slots should be removed."
 
+
 class TestReservationReserveSlot:
+
     @pytest.fixture
     def reservation(self):
         res = Reservation()
@@ -450,13 +482,17 @@ class TestReservationReserveSlot:
             "check_avilability should be called with time_slot as argument"
         assert time_slot in reservation.time_slots, "time slot should be in time_slots"
 
+
 class TestReservationGetNextEventTime:
+
     @pytest.fixture
     def reservation(self):
         return Reservation()
+
     def test_get_next_event_time_no_slots(self, reservation):
         now = datetime.now()
-        assert reservation.get_next_event_time(now) is None, "Should return None when there are no time slots."
+        assert reservation.get_next_event_time(
+            now) is None, "Should return None when there are no time slots."
 
     def test_get_next_event_time_future_slots(self, reservation):
         now = datetime.now()
@@ -470,13 +506,19 @@ class TestReservationGetNextEventTime:
         assert reservation.get_next_event_time(now) == expected_time, \
             "Should return the start of the next future slot after rounding to the next second."
 
+
 class TestReservationGetCurrentSlot:
+
     @pytest.fixture
     def reservation(self):
         res = Reservation()
         now = datetime.now()
-        res.time_slots.append(TimeSlice(start=now - timedelta(hours=1), end=now + timedelta(hours=1)))  # Active slot
-        res.time_slots.append(TimeSlice(start=now + timedelta(hours=2), end=now + timedelta(hours=3)))  # Future slot
+        res.time_slots.append(
+            TimeSlice(start=now - timedelta(hours=1),
+                      end=now + timedelta(hours=1)))    # Active slot
+        res.time_slots.append(
+            TimeSlice(start=now + timedelta(hours=2),
+                      end=now + timedelta(hours=3)))    # Future slot
         return res
 
     def test_get_current_slot_inside_slot(self, reservation):
@@ -489,29 +531,35 @@ class TestReservationGetCurrentSlot:
 
     def test_get_current_slot_outside_slot(self, reservation):
         """Tets trying to get current slot outside any current time slot"""
-        now = datetime.now() + timedelta(hours=4)  # Outside any defined slots
+        now = datetime.now() + timedelta(hours=4)    # Outside any defined slots
         current_slot = reservation.get_current_slot(now)
         assert current_slot == None, "Should return None when now is outside any slot."
 
     def test_get_current_slot_no_slots(self):
         """Calling with just reservation that has no slots added"""
-        reservation = Reservation()  # no slots added
+        reservation = Reservation()    # no slots added
         now = datetime.now()
         current_slot = reservation.get_current_slot(now)
         assert current_slot == None, "Should return none when there are no time slots"
 
+
 class TestReservationPruneToCurrent:
+
     @pytest.fixture
     def reservation(self):
         res = Reservation()
         now = datetime.now()
-        res.time_slots.append(TimeSlice(start=now - timedelta(hours=1), end=now + timedelta(hours=1)))  # Past to future
-        res.time_slots.append(TimeSlice(start=now + timedelta(hours=2), end=now + timedelta(hours=3)))  # Future slot
+        res.time_slots.append(
+            TimeSlice(start=now - timedelta(hours=1),
+                      end=now + timedelta(hours=1)))    # Past to future
+        res.time_slots.append(
+            TimeSlice(start=now + timedelta(hours=2),
+                      end=now + timedelta(hours=3)))    # Future slot
         return res
 
     def test_prune_to_current_no_active_slot(self, reservation):
         """Test that all slots are cleared if no current slot is active."""
-        now = datetime.now() + timedelta(hours=4)  # Time beyond all slots
+        now = datetime.now() + timedelta(hours=4)    # Time beyond all slots
         grace_time = timedelta(minutes=30)
         reservation.prune_to_current(grace_time, now)
 
@@ -519,28 +567,33 @@ class TestReservationPruneToCurrent:
 
     def test_prune_to_current_active_slot_extending_beyond_grace_period(self, reservation):
         """Test that an active slot extending beyond the grace period is pruned correctly."""
-        now = datetime.now() + timedelta(minutes=10)  # 10 minutes from now
-        grace_time = timedelta(minutes=20) # 20 minutes from now
+        now = datetime.now() + timedelta(minutes=10)    # 10 minutes from now
+        grace_time = timedelta(minutes=20)    # 20 minutes from now
         reservation.prune_to_current(grace_time, now)
-        expected_end_time = now + grace_time # should extend time
+        expected_end_time = now + grace_time    # should extend time
         assert len(reservation.time_slots) == 1, "Only one slot should remain."
-        assert reservation.time_slots[0].end == expected_end_time, "Slot should end at the grace period end."
+        assert reservation.time_slots[
+            0].end == expected_end_time, "Slot should end at the grace period end."
+
 
 class TestReservationGetConflicts:
+
     @pytest.fixture
     def reservation(self):
         res = Reservation()
         now = datetime.now()
         # Setup predefined time slots
         res.time_slots.append(TimeSlice(start=now, end=now + timedelta(hours=1)))
-        res.time_slots.append(TimeSlice(start=now + timedelta(hours=2), end=now + timedelta(hours=3)))
+        res.time_slots.append(
+            TimeSlice(start=now + timedelta(hours=2), end=now + timedelta(hours=3)))
         return res
 
     def test_no_conflicts(self, reservation):
         """Tests no conflicts returned when checking  """
         other_reservation = Reservation()
         other_reservation.time_slots.append(
-            TimeSlice(start=datetime.now() + timedelta(hours=4), end=datetime.now() + timedelta(hours=5)))
+            TimeSlice(start=datetime.now() + timedelta(hours=4),
+                      end=datetime.now() + timedelta(hours=5)))
         conflicts = reservation.get_conflicts(other_reservation)
         assert len(conflicts) == 0, "There should be no conflicts."
 
@@ -548,22 +601,28 @@ class TestReservationGetConflicts:
         """Tests partial conflicts returned"""
         other_reservation = Reservation()
         other_reservation.time_slots.append(
-            TimeSlice(start=datetime.now() + timedelta(hours=4), end=datetime.now() + timedelta(hours=5)))
+            TimeSlice(start=datetime.now() + timedelta(hours=4),
+                      end=datetime.now() + timedelta(hours=5)))
         other_reservation.time_slots.append(
-            TimeSlice(start=datetime.now() + timedelta(minutes=30), end=datetime.now() + timedelta(hours=1, minutes=30)))
+            TimeSlice(start=datetime.now() + timedelta(minutes=30),
+                      end=datetime.now() + timedelta(hours=1, minutes=30)))
         conflicts = reservation.get_conflicts(other_reservation)
         assert len(conflicts) == 1, "There should be one conflict."
 
     def test_complete_conflicts(self, reservation):
         """Tests conflicts with our fixture and appended times"""
         other_reservation = Reservation()
-        other_reservation.time_slots.append(TimeSlice(start=datetime.now(), end=datetime.now() + timedelta(hours=1)))
         other_reservation.time_slots.append(
-            TimeSlice(start=datetime.now() + timedelta(hours=2), end=datetime.now() + timedelta(hours=3)))
+            TimeSlice(start=datetime.now(), end=datetime.now() + timedelta(hours=1)))
+        other_reservation.time_slots.append(
+            TimeSlice(start=datetime.now() + timedelta(hours=2),
+                      end=datetime.now() + timedelta(hours=3)))
         conflicts = reservation.get_conflicts(other_reservation)
         assert len(conflicts) == 2, "There should be two conflicts."
 
+
 class TestReservationManagerUpdate:
+
     @pytest.fixture
     def reservation_manager(self):
         parent = Mock()
@@ -591,15 +650,20 @@ class TestReservationManagerUpdate:
         reservation_manager.update(now=mock_now)
 
         # assert the internal method calls
-        reservation_manager.get_reservation_state.assert_called_once_with(mock_now), "get_reservation_state should be called once"
-        reservation_manager.get_next_event_time.assert_called_once_with(mock_now), "get_next_event_time should be called once"
-        reservation_manager._get_adjusted_next_event_time.assert_called_once_with(mock_now, future_time, None), "get_adjusted_next_event_time should be called once"
+        reservation_manager.get_reservation_state.assert_called_once_with(
+            mock_now), "get_reservation_state should be called once"
+        reservation_manager.get_next_event_time.assert_called_once_with(
+            mock_now), "get_next_event_time should be called once"
+        reservation_manager._get_adjusted_next_event_time.assert_called_once_with(
+            mock_now, future_time, None), "get_adjusted_next_event_time should be called once"
         assert reservation_manager._update_event_time == future_time, "Updated event time should be the future time"
 
         #TODO add more tests for update
 
+
 class TestReservationManagerGetAdjustedNextEventTime:
     now = get_aware_utc_now()
+
     @pytest.fixture
     def reservation_manager(self):
         parent = Mock()
@@ -614,22 +678,28 @@ class TestReservationManagerGetAdjustedNextEventTime:
         rm._cleanup = MagicMock()
         rm.save_state = MagicMock()
         return rm
+
     def test_get_adjusted_next_event_time(self, reservation_manager):
         """Tests that it returns the next event time when next event is before previously reserved time"""
-        next_event_time = self.now + timedelta(minutes=1)  # 60 seconds ahead
-        previously_reserved_time = self.now + timedelta(minutes=2)  # 120 seconds ahead
+        next_event_time = self.now + timedelta(minutes=1)    # 60 seconds ahead
+        previously_reserved_time = self.now + timedelta(minutes=2)    # 120 seconds ahead
 
-        adjusted_time = reservation_manager._get_adjusted_next_event_time(self.now, next_event_time, previously_reserved_time)
+        adjusted_time = reservation_manager._get_adjusted_next_event_time(
+            self.now, next_event_time, previously_reserved_time)
         assert adjusted_time == next_event_time, "The adjusted time should be the next event time"
+
     def test_get_adjusted_next_event_time_previously_returned(self, reservation_manager):
         """Tests that it returns the previously reserved time when next event is after previously reserved time"""
-        next_event_time = self.now + timedelta(minutes=2)  # 120 seconds ahead
-        previously_reserved_time = self.now + timedelta(minutes=1)  # 60 seconds ahead
+        next_event_time = self.now + timedelta(minutes=2)    # 120 seconds ahead
+        previously_reserved_time = self.now + timedelta(minutes=1)    # 60 seconds ahead
 
-        adjusted_time = reservation_manager._get_adjusted_next_event_time(self.now, next_event_time, previously_reserved_time)
+        adjusted_time = reservation_manager._get_adjusted_next_event_time(
+            self.now, next_event_time, previously_reserved_time)
         assert adjusted_time == previously_reserved_time, "The adjusted time should be the previous event time"
 
+
 class TestReservationManagerLoadState:
+
     @pytest.fixture
     def reservation_manager(self):
         parent = Mock()
@@ -647,13 +717,14 @@ class TestReservationManagerLoadState:
     def test_load_state_valid_initial_string(self, reservation_manager):
         """Tests loading state with a valid initial state string """
         now = get_aware_utc_now()
-        reservation_manager.load_state(now=now, initial_state_string=pickle.dumps({'task1': 'data1'}))
+        reservation_manager.load_state(now=now,
+                                       initial_state_string=pickle.dumps({'task1': 'data1'}))
         assert 'task1' in reservation_manager.tasks, "Tasks should contain the loaded data."
 
     def test_load_state_pickle_error(self, reservation_manager):
         """Test loading state with a pickle error."""
         now = get_aware_utc_now()
-        reservation_manager.load_state(now=now, initial_state_string= b'not a pickle')
+        reservation_manager.load_state(now=now, initial_state_string=b'not a pickle')
         assert reservation_manager.tasks == {}, "Tasks should be empty after a pickle error"
 
     def test_load_state_general_exception(self, reservation_manager):
@@ -661,6 +732,8 @@ class TestReservationManagerLoadState:
         now = get_aware_utc_now()
         reservation_manager.load_state(now=now, initial_state_string='unpickleable data')
         assert reservation_manager.tasks == {}, "Tasks should be empty after an exception."
+
+
 class TestReservationManagerSaveState:
     now = get_aware_utc_now()
 
@@ -681,6 +754,7 @@ class TestReservationManagerSaveState:
         rm._log = logger
 
         return rm
+
     def test_save_state_set_called_once(self, reservation_manager):
         expected_data = b64encode(dumps(reservation_manager.tasks)).decode("utf-8")
 
@@ -688,10 +762,9 @@ class TestReservationManagerSaveState:
 
         # Tests if our mocked object was called once, and with the correct args
         reservation_manager.parent.vip.config.set.assert_called_once_with(
-            reservation_manager.reservation_state_file,
-            expected_data,
-            send_update=False
-        ), "save state should call parent.vip.config.set with correct data"
+            reservation_manager.reservation_state_file, expected_data,
+            send_update=False), "save state should call parent.vip.config.set with correct data"
+
     def test_save_state_correct_file_name(self, reservation_manager):
         # make sure it's correct before
         assert reservation_manager.reservation_state_file == "_reservation_state", "file name should be _reservation_state before"
@@ -699,10 +772,12 @@ class TestReservationManagerSaveState:
         # and after calling save_state
         assert reservation_manager.reservation_state_file == "_reservation_state", "file name should be _reservation_state after"
 
+
 class TestReservationManagerNewTask:
     sender = "test.agent"
     task_id = "test_task_id"
     requests = [['device1', '2022-01-01T00:00:00', '2022-01-01T01:00:00']]
+
     @pytest.fixture
     def reservation_manager(self):
         parent = Mock()
@@ -710,7 +785,7 @@ class TestReservationManagerNewTask:
         parent.vip.config.get = MagicMock(return_value=pickle.dumps({}))
         parent.vip.config.set = MagicMock()
         parent.config = Mock()
-        parent.config.reservation_publish_interval = 60  # Mock the interval for testing
+        parent.config.reservation_publish_interval = 60    # Mock the interval for testing
         grace_time = 10
 
         rm = ReservationManager(parent, grace_time)
@@ -719,83 +794,148 @@ class TestReservationManagerNewTask:
         return rm
 
     def test_new_task_valid_inputs(self, reservation_manager):
-        result = reservation_manager.new_task(self.sender, self.task_id, priority='HIGH', requests=self.requests)
+        result = reservation_manager.new_task(self.sender,
+                                              self.task_id,
+                                              priority='HIGH',
+                                              requests=self.requests)
         assert result.success
+
     def test_new_task_with_invalid_sender(self, reservation_manager):
-        result = reservation_manager.new_task(sender="", task_id=self.task_id, priority="HIGH", requests=self.requests)
+        result = reservation_manager.new_task(sender="",
+                                              task_id=self.task_id,
+                                              priority="HIGH",
+                                              requests=self.requests)
         assert result.info_string == 'MALFORMED_REQUEST: TypeError: agent_id must be a nonempty string' and not result.success
+
     def test_missing_agent_id(self, reservation_manager):
-        result = reservation_manager.new_task(sender=None, task_id=self.task_id, priority="HIGH", requests=self.requests)
+        result = reservation_manager.new_task(sender=None,
+                                              task_id=self.task_id,
+                                              priority="HIGH",
+                                              requests=self.requests)
         assert result.info_string == 'MISSING_AGENT_ID' and not result.success
+
     def test_invalid_task_id(self, reservation_manager):
         """ Tests task request with missing task id, empty task id, and int task id"""
-        result = reservation_manager.new_task(self.sender, task_id=None, priority="HIGH", requests=self.requests)
+        result = reservation_manager.new_task(self.sender,
+                                              task_id=None,
+                                              priority="HIGH",
+                                              requests=self.requests)
         assert result.info_string == 'MISSING_TASK_ID' and not result.success
 
-        result = reservation_manager.new_task(self.sender, task_id="", priority="HIGH", requests=self.requests)
+        result = reservation_manager.new_task(self.sender,
+                                              task_id="",
+                                              priority="HIGH",
+                                              requests=self.requests)
         assert result.info_string == 'MALFORMED_REQUEST: TypeError: taskid must be a nonempty string' and not result.success
 
-        result = reservation_manager.new_task(self.sender, task_id=1234, priority="HIGH", requests=self.requests)
+        result = reservation_manager.new_task(self.sender,
+                                              task_id=1234,
+                                              priority="HIGH",
+                                              requests=self.requests)
         assert result.info_string == 'MALFORMED_REQUEST: TypeError: taskid must be a nonempty string' and not result.success
+
     def test_requests_malformed(self, reservation_manager):
         """ Tests malformed request by creating new task with empty dates"""
-        result = reservation_manager.new_task(self.sender, self.task_id, priority="HIGH", requests=[])
+        result = reservation_manager.new_task(self.sender,
+                                              self.task_id,
+                                              priority="HIGH",
+                                              requests=[])
         assert result.info_string == 'MALFORMED_REQUEST_EMPTY' and not result.success
+
     def test_new_task_missing_priority(self, reservation_manager):
-        result = reservation_manager.new_task(self.sender, self.task_id, priority=None, requests=self.requests)
+        result = reservation_manager.new_task(self.sender,
+                                              self.task_id,
+                                              priority=None,
+                                              requests=self.requests)
         assert result.info_string == 'MISSING_PRIORITY' and not result.success
+
     def test_lowercase_priority(self, reservation_manager):
-        result = reservation_manager.new_task(self.sender, self.task_id, priority="low", requests=self.requests)
+        result = reservation_manager.new_task(self.sender,
+                                              self.task_id,
+                                              priority="low",
+                                              requests=self.requests)
         assert result.success
+
     def test_invalid_priority(self, reservation_manager):
         """ Tests an invalid priority (Medium priority does not exist)"""
-        result = reservation_manager.new_task(self.sender, self.task_id, priority="MEDIUM", requests=self.requests)
+        result = reservation_manager.new_task(self.sender,
+                                              self.task_id,
+                                              priority="MEDIUM",
+                                              requests=self.requests)
         assert result.info_string == 'INVALID_PRIORITY' and not result.success
+
     def test_task_exists(self, reservation_manager):
         task_id = "test_task_id"
         mock_task = Mock()
-        mock_task.make_current = Mock()  # add the make_current method to the mock task
+        mock_task.make_current = Mock()    # add the make_current method to the mock task
         reservation_manager.tasks[task_id] = mock_task
 
-        result = reservation_manager.new_task(self.sender, task_id, priority="HIGH", requests=self.requests)
+        result = reservation_manager.new_task(self.sender,
+                                              task_id,
+                                              priority="HIGH",
+                                              requests=self.requests)
         assert result.info_string == 'TASK_ID_ALREADY_EXISTS' and result.success == False
+
     def test_request_new_task_should_succeed_on_preempt_self(self, reservation_manager):
         """
         Test schedule preemption by a higher priority task from the same sender.
         """
-        result = reservation_manager.new_task(self.sender, self.task_id, priority='LOW_PREEMPT', requests=self.requests)
+        result = reservation_manager.new_task(self.sender,
+                                              self.task_id,
+                                              priority='LOW_PREEMPT',
+                                              requests=self.requests)
         assert result.success
-        result = reservation_manager.new_task(self.sender, "high_priority_task_id", priority='HIGH', requests=self.requests)
+        result = reservation_manager.new_task(self.sender,
+                                              "high_priority_task_id",
+                                              priority='HIGH',
+                                              requests=self.requests)
         assert result.success
         assert result.info_string == 'TASKS_WERE_PREEMPTED'
+
     def test_schedule_preempt_other(self, reservation_manager):
         """
         Test schedule preemption by a higher priority task from a different sender.
         """
-        result = reservation_manager.new_task("agent1", self.task_id, priority='LOW_PREEMPT', requests=self.requests)
+        result = reservation_manager.new_task("agent1",
+                                              self.task_id,
+                                              priority='LOW_PREEMPT',
+                                              requests=self.requests)
         assert result.success
-        result = reservation_manager.new_task("agent2", "high_priority_task_id", priority='HIGH', requests=self.requests)
+        result = reservation_manager.new_task("agent2",
+                                              "high_priority_task_id",
+                                              priority='HIGH',
+                                              requests=self.requests)
         assert result.success
         assert result.info_string == 'TASKS_WERE_PREEMPTED'
+
     def test_reservation_conflict(self, reservation_manager):
         """
         Test task conflict from different agents.
         """
-        result = reservation_manager.new_task("agent1", self.task_id, priority='LOW', requests=self.requests)
+        result = reservation_manager.new_task("agent1",
+                                              self.task_id,
+                                              priority='LOW',
+                                              requests=self.requests)
         assert result.success
-        result = reservation_manager.new_task("agent2", "different_task_id", priority='LOW', requests=self.requests)
+        result = reservation_manager.new_task("agent2",
+                                              "different_task_id",
+                                              priority='LOW',
+                                              requests=self.requests)
         assert result.info_string == 'CONFLICTS_WITH_EXISTING_RESERVATIONS'
+
     def test_reservation_conflict_self(self, reservation_manager):
         """
         Test task conflict from one request.
         """
         # two tasks with same time frame
-        requests = [
-            ['device1', '2022-01-01T00:00:00', '2022-01-01T01:00:00'],
-            ['device1', '2022-01-01T00:00:00', '2022-01-01T01:00:00']
-        ]
-        result = reservation_manager.new_task("agent2", self.task_id, priority='LOW', requests=requests)
+        requests = [['device1', '2022-01-01T00:00:00', '2022-01-01T01:00:00'],
+                    ['device1', '2022-01-01T00:00:00', '2022-01-01T01:00:00']]
+        result = reservation_manager.new_task("agent2",
+                                              self.task_id,
+                                              priority='LOW',
+                                              requests=requests)
         assert result.info_string == 'REQUEST_CONFLICTS_WITH_SELF'
+
     def test_schedule_overlap(self, reservation_manager):
         """
         Test successful task when end time of one time slot is the same as
@@ -803,20 +943,31 @@ class TestReservationManagerNewTask:
         """
         time_1 = ['device1', '2022-01-01T00:00:00', '2022-01-01T01:00:00']
         time_2 = ['device2', '2022-01-01T01:00:00', '2022-01-02T01:00:00']
-        result = reservation_manager.new_task("agent1", self.task_id, priority='LOW', requests=time_1)
+        result = reservation_manager.new_task("agent1",
+                                              self.task_id,
+                                              priority='LOW',
+                                              requests=time_1)
         assert result.success
-        result = reservation_manager.new_task("agent2", "different_task_id", priority='LOW', requests=time_2)
+        result = reservation_manager.new_task("agent2",
+                                              "different_task_id",
+                                              priority='LOW',
+                                              requests=time_2)
         assert result.success
+
     def test_cancel_error_invalid_task(self, reservation_manager):
         """
         Test invalid task id when trying to cancel a task.
         """
         # creating task with a task_id of "task_that_exists"
-        result = reservation_manager.new_task(self.sender, task_id="task_that_exists", priority='LOW', requests=self.requests)
+        result = reservation_manager.new_task(self.sender,
+                                              task_id="task_that_exists",
+                                              priority='LOW',
+                                              requests=self.requests)
         assert result.success
         # trying to cancel a task with a task_id of "unexistent_task_id"
         result = reservation_manager.cancel_task(sender=self.sender, task_id="unexistent_task_id")
         assert result.info_string == 'TASK_ID_DOES_NOT_EXIST', "task id should not exist"
+
 
 class TestReservationManagerCancelTask:
     sender = "test.agent"
@@ -834,6 +985,7 @@ class TestReservationManagerCancelTask:
         grace_time = 10
         rm = ReservationManager(parent, grace_time)
         return rm
+
     def test_cancel_task_nonexistent_id(self, reservation_manager):
         result = reservation_manager.cancel_task(self.sender, self.task_id)
         assert result.success == False, "result should fail"
@@ -853,7 +1005,9 @@ class TestReservationManagerCancelTask:
         assert result.success == True, "result should succeed"
         assert self.task_id not in reservation_manager.tasks, "task id should no longer be in tasks"
 
+
 class TestReservationManagerGetReservationState:
+
     @pytest.fixture
     def reservation_manager(self):
         parent = Mock()
@@ -865,9 +1019,8 @@ class TestReservationManagerGetReservationState:
 
         task = Mock()
         task.agent_id = "agent1"
-        task.get_current_slots = MagicMock(return_value={
-            "device1": Mock(end=datetime.now() + timedelta(minutes=5))
-        })
+        task.get_current_slots = MagicMock(
+            return_value={"device1": Mock(end=datetime.now() + timedelta(minutes=5))})
 
         # add tasks to running and preempted sets
         rm.tasks = {"task1": task}
@@ -882,7 +1035,8 @@ class TestReservationManagerGetReservationState:
         now = datetime.now()
         result = reservation_manager.get_reservation_state(now)
 
-        reservation_manager._cleanup.assert_called_once_with(now), "_cleanup should be called with (now)"
+        reservation_manager._cleanup.assert_called_once_with(
+            now), "_cleanup should be called with (now)"
         device_state = result["device1"]
 
         assert "device1" in result, "Device1 should be in reservation state"
@@ -890,13 +1044,17 @@ class TestReservationManagerGetReservationState:
         assert device_state.task_id == "task1", "task1 should be in task_id"
         assert device_state.time_remaining > 299, "There should be time remaining on the running task"
 
+
 class TestReservationGetNextEventTime:
+
     @pytest.fixture
     def reservation(self):
         return Reservation()
+
     def test_get_next_event_time_no_slots(self, reservation):
         now = datetime.now()
-        assert reservation.get_next_event_time(now) is None, "Should return None when there are no time slots."
+        assert reservation.get_next_event_time(
+            now) is None, "Should return None when there are no time slots."
 
     def test_get_next_event_time_future_slots(self, reservation):
         now = datetime.now()
@@ -908,21 +1066,24 @@ class TestReservationGetNextEventTime:
         expected_time = future_start.replace(microsecond=0) + timedelta(seconds=1)
 
         assert reservation.get_next_event_time(now) == expected_time, \
-            "Should return the start of the next future slot after rounding to the next second."
+            "Should return the start of the next future slot after rounding to the next second"
 
     def test_get_next_event_time_during_active_slot(self, reservation):
         """Tests get_next_event_time returns the most recent end time, indicating the next even time"""
         now = datetime.now()
-        active_start = now - timedelta(minutes=30)  # 30 minutes ago
-        active_end = now + timedelta(minutes=30)  # 30 minutes from now
+        active_start = now - timedelta(minutes=30)    # 30 minutes ago
+        active_end = now + timedelta(minutes=30)    # 30 minutes from now
         reservation.time_slots.append(TimeSlice(start=active_start, end=active_end))
 
         expected_time = active_end.replace(microsecond=0) + timedelta(
-            seconds=1)  # Adjusting for the rounding in the method
+            seconds=1)    # Adjusting for the rounding in the method
         assert reservation.get_next_event_time(
             now) == expected_time, "Should return the end of the current active slot."
+
+
 class TestReservationManagerCleanup:
     now = get_aware_utc_now()
+
     @pytest.fixture
     def reservation_manager(self):
         parent = Mock()
@@ -942,7 +1103,7 @@ class TestReservationManagerCleanup:
         rm.task_preempted = Mock(spec=Task)
         rm.task_preempted.state = Task.STATE_PREEMPTED
 
-        # Setup the manager with our mock tasks.
+        # Set up the manager with our mock tasks.
         rm.tasks = {
             "finished": rm.task_finished,
             "running": rm.task_running,
