@@ -870,7 +870,6 @@ class TestSetPoint:
 
     def test_set_point_with_combined_path_and_empty_point(self, PDA):
         """Test handling of path containing the point name and point_name is empty"""
-        # TODO is this expected? to call it with None? it does not use the path with the point name when point name is none?
         kwargs = {}
         PDA.set_point(path='device/topic/SampleWritableFloat', point_name=None, value=42, **kwargs)
         PDA._equipment_id.assert_called_with("device/topic/SampleWritableFloat", None)
@@ -889,12 +888,8 @@ class TestSetPoint:
 
     def test_set_point_deprecated(self, PDA):
         """Test old style actuator call"""
-        PDA.set_point("ilc.agnet", 'device/topic', 42, 'SampleWritableFloat', {})
-        # TODO shouldnt this work? its receiving old style params but adding none to the end...
-        # TODO as of now it is mostly working it seems.
-        # Assert that self._equipment_id was called with the correct arguments
-        # TODO this should be the same as the test above it but for some reason its not.
-        PDA._equipment_id.assert_called_with(("device/topic", "SampleWritableFloat"), None)
+        PDA.set_point("device/topic", 'SampleWritableFloat', 42)
+        PDA._equipment_id.assert_called_with("device/topic", "SampleWritableFloat")
 
 
 class TestGetMultiplePoints:
@@ -989,7 +984,9 @@ class TestSetMultiplePoints:
         PDA._equipment_id.assert_any_call('device1', 'point2')
 
     def test_set_multiple_with_old_style_args(self, PDA):
-        pass    #TODO have david explain again - how are they different?
+        result = PDA.set_multiple_points(path="some/path",
+                                         point_names_values=[('point1', 100), ('point2', 200)])
+        assert result == {}    # returns no errors with old style args
 
 
 class TestRevertPoint:
@@ -1026,7 +1023,8 @@ class TestRevertPoint:
         """Test normal case for reverting a point."""
         PDA.revert_point(self.path, self.point_name)
 
-        # PDA._equipment_id.assert_called_with(self.path, self.point_name) # TODO not sure why this is not working
+        PDA._equipment_id.assert_called_with(self.path, 'devices/device1/SampleWritableFloat1'
+                                             )    # TODO not sure why this is returning what it is
         PDA.equipment_tree.get_node.assert_called_with("devices/device1/SampleWritableFloat1")
         PDA.equipment_tree.get_node().get_remote.return_value.revert_point.assert_called_with(
             "devices/device1/SampleWritableFloat1")
