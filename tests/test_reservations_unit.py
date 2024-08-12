@@ -10,7 +10,7 @@ from volttron.utils import get_aware_utc_now
 
 
 class TestTimeSliceStretchToInclude:
-    now = datetime.utcnow()
+    now = get_aware_utc_now()
 
     def test_start_is_none(self):
         ts1 = TimeSlice(start=None, end=self.now + timedelta(hours=2))
@@ -85,20 +85,20 @@ class TestTaskMakeCurrent:
         # Mocking device reservations within the task
         task.devices = {'device1': MagicMock(), 'device2': MagicMock()}
         # our task is active starting NOW for 1 hour
-        start_time = datetime.now()
-        end_time = datetime.now() + timedelta(hours=1)
+        start_time = get_aware_utc_now()
+        end_time = get_aware_utc_now() + timedelta(hours=1)
         task.time_slice = TimeSlice(start_time, end_time)
         return task
 
     def test_task_already_finished(self, task):
         """set task state to finished, which clears devices, then we check that task.devices is empty"""
         task.state = Task.STATE_FINISHED
-        task.make_current(datetime.now())
+        task.make_current(get_aware_utc_now())
         assert not task.devices, "Devices should be cleared when the task is finished."
 
     def test_remove_finished_reservations(self, task):
         """tests automatic removal of a device when task is finished and keeping of a non finished device"""
-        now = datetime.now()
+        now = get_aware_utc_now()
         # Set one reservation to be finished
         task.devices['device1'].finished.return_value = True
         task.devices['device2'].finished.return_value = False
@@ -108,19 +108,20 @@ class TestTaskMakeCurrent:
 
     def test_state_transition_to_pre_run(self, task):
         """Tests calling make current with a time before the task is set to start"""
-        past_time = datetime.now() - timedelta(hours=1)    # one hour before task starts
+        past_time = get_aware_utc_now() - timedelta(hours=1)    # one hour before task starts
         task.make_current(past_time)
         assert task.state == Task.STATE_PRE_RUN, "task state should be in pre run"
 
     def test_state_transition_running(self, task):
         """Tests calling make current 30 minutes after it has started """
-        within_time = datetime.now() + timedelta(minutes=30)    # 30 minutes after task has started
+        within_time = get_aware_utc_now() + timedelta(
+            minutes=30)    # 30 minutes after task has started
         task.make_current(within_time)
         assert task.state == Task.STATE_RUNNING, "task state should be running"
 
     def test_state_transition_finished(self, task):
         """Tests calling make current with a time after the task is finished """
-        past_time = datetime.now() + timedelta(hours=2)    # 1 hr after task was set to end
+        past_time = get_aware_utc_now() + timedelta(hours=2)    # 1 hr after task was set to end
         task.make_current(past_time)
         assert task.state == Task.STATE_FINISHED, "task state should be finished"
 
@@ -137,7 +138,7 @@ class TestTaskGetCurrentSlot:
 
     def test_get_current_slots_during_active_time(self, task):
         """Tests return when two slots are active"""
-        now = datetime.now()
+        now = get_aware_utc_now()
         task.devices['device1'].get_current_slot.return_value = TimeSlice(
             now, now + timedelta(minutes=30))
         task.devices['device2'].get_current_slot.return_value = TimeSlice(
@@ -151,7 +152,7 @@ class TestTaskGetCurrentSlot:
 
     def test_get_current_slots_with_no_active_slots(self, task):
         """Tests return when two slots are none"""
-        now = datetime.now()
+        now = get_aware_utc_now()
         task.devices['device1'].get_current_slot.return_value = None
         task.devices['device2'].get_current_slot.return_value = None
 
@@ -161,7 +162,7 @@ class TestTaskGetCurrentSlot:
 
     def test_get_current_slots_with_mixed_active_and_inactive_slots(self, task):
         """Tests that get current slots returns correct slots when mixed"""
-        now = datetime.now()
+        now = get_aware_utc_now()
         task.devices['device1'].get_current_slot.return_value = TimeSlice(
             now, now + timedelta(minutes=30))
         task.devices['device2'].get_current_slot.return_value = None
@@ -177,7 +178,7 @@ class TestTaskGetConflicts:
 
     @pytest.fixture
     def task(self):
-        now = datetime.now()
+        now = get_aware_utc_now()
 
         task = Task(agent_id="agent1", priority="HIGH", requests=[])
         reservation1 = Reservation()
@@ -198,8 +199,8 @@ class TestTaskGetConflicts:
         other_task.devices['device1'] = Reservation()
         other_task.devices['device1'].time_slots.append(
         # starts in 4hrs and lasts for 1hr
-            TimeSlice(start=datetime.now() + timedelta(hours=4),
-                      end=datetime.now() + timedelta(hours=5)))
+            TimeSlice(start=get_aware_utc_now() + timedelta(hours=4),
+                      end=get_aware_utc_now() + timedelta(hours=5)))
 
         conflicts = task.get_conflicts(other_task)
         assert conflicts == [], "There should be no conflicts."
@@ -210,8 +211,8 @@ class TestTaskGetConflicts:
         other_task.devices['device1'] = Reservation()
         other_task.devices['device1'].time_slots.append(
         # starts in 30 minutes (conflict with fixture) lasts for 1.5hrs
-            TimeSlice(start=datetime.now() + timedelta(minutes=30),
-                      end=datetime.now() + timedelta(hours=1, minutes=30)))
+            TimeSlice(start=get_aware_utc_now() + timedelta(minutes=30),
+                      end=get_aware_utc_now() + timedelta(hours=1, minutes=30)))
 
         conflicts = task.get_conflicts(other_task)
         assert len(conflicts) == 1, "There should be one conflict."
@@ -222,11 +223,11 @@ class TestTaskGetConflicts:
         other_task.devices['device1'] = Reservation()
         other_task.devices['device1'].time_slots.append(
         # starts now and ends in 1 hour
-            TimeSlice(start=datetime.now(), end=datetime.now() + timedelta(hours=1)))
+            TimeSlice(start=get_aware_utc_now(), end=get_aware_utc_now() + timedelta(hours=1)))
         # starts in two hours and lasts for 1 hour
         other_task.devices['device1'].time_slots.append(
-            TimeSlice(start=datetime.now() + timedelta(hours=2),
-                      end=datetime.now() + timedelta(hours=3)))
+            TimeSlice(start=get_aware_utc_now() + timedelta(hours=2),
+                      end=get_aware_utc_now() + timedelta(hours=3)))
 
         conflicts = task.get_conflicts(other_task)
         assert len(conflicts) == 2, "There should be two conflicts"
@@ -290,32 +291,34 @@ class TestTaskPreempt:
 
     @pytest.fixture
     def task(self):
-        requests = [["device1", datetime.now(), datetime.now() + timedelta(hours=1)]]
+        requests = [["device1", get_aware_utc_now(), get_aware_utc_now() + timedelta(hours=1)]]
         return Task(agent_id="test_agent", priority="HIGH", requests=requests)
 
     @pytest.fixture
     def reservation(self):
         reservation = Reservation()
-        reservation.reserve_slot(TimeSlice(datetime.now(), datetime.now() + timedelta(hours=1)))
+        reservation.reserve_slot(
+            TimeSlice(get_aware_utc_now(),
+                      get_aware_utc_now() + timedelta(hours=1)))
         return reservation
 
     def test_preempt_already_preempted(self, task):
         """Tests if the task state is already preempted"""
         task.state = Task.STATE_PREEMPTED
-        result = task.preempt(grace_time=timedelta(minutes=10), now=datetime.now())
+        result = task.preempt(grace_time=timedelta(minutes=10), now=get_aware_utc_now())
         assert result == True
         assert task.state == Task.STATE_PREEMPTED
 
     def test_preempt_finished(self, task):
         """Tests if the task state is already finished"""
         task.state = Task.STATE_FINISHED
-        result = task.preempt(grace_time=timedelta(minutes=10), now=datetime.now())
+        result = task.preempt(grace_time=timedelta(minutes=10), now=get_aware_utc_now())
         assert result == False
 
     def test_preempt_active_time_slots(self, task, reservation):
         """Tests running with tasks that qualify for preemption"""
         task.devices['device1'] = reservation
-        now = datetime.now()
+        now = get_aware_utc_now()
         result = task.preempt(grace_time=timedelta(minutes=30), now=now)
         assert result == True
         assert task.state == Task.STATE_PREEMPTED    # preempt method converted
@@ -324,7 +327,7 @@ class TestTaskPreempt:
 
     def test_preempt_no_remaining_time_slots(self, task, reservation):
         """ Set the current time after the end of the reservation"""
-        now = datetime.now() + timedelta(hours=2)
+        now = get_aware_utc_now() + timedelta(hours=2)
         task.devices['device1'] = reservation
         result = task.preempt(grace_time=timedelta(minutes=30), now=now)
         assert result == False
@@ -333,7 +336,7 @@ class TestTaskPreempt:
     def test_grace_period_extension(self, task, reservation):
         """Tests extedning time slot"""
         task.devices['device1'] = reservation
-        now = datetime.now()
+        now = get_aware_utc_now()
         result = task.preempt(grace_time=timedelta(minutes=30), now=now)
         assert result == True
         assert task.time_slice.start == now
@@ -349,12 +352,12 @@ class TestTaskGetNextEventTime:
 
     def test_no_reservations(self, task):
         """Test get_next_event_time returns None when there are no reservations."""
-        now = datetime.now()
+        now = get_aware_utc_now()
         assert task.get_next_event_time(now) is None
 
     def test_single_reservation(self, task):
         """Test with a single reservation."""
-        now = datetime.now()
+        now = get_aware_utc_now()
         reservation = Mock()
         # our reservation object is created from now to 10 mins from now.
         reservation.get_next_event_time.return_value = now + timedelta(minutes=10)
@@ -365,7 +368,7 @@ class TestTaskGetNextEventTime:
 
     def test_multiple_reservations(self, task):
         """ Test with multiple reservations which should return the earliest event time"""
-        now = datetime.now()
+        now = get_aware_utc_now()
         reservation1 = Mock()
         reservation1.get_next_event_time.return_value = now + timedelta(minutes=10)
         reservation2 = Mock()
@@ -378,7 +381,7 @@ class TestTaskGetNextEventTime:
 
     def test_mixed_null_and_valid_times(self, task):
         """Test with mixed null and valid next event times."""
-        now = datetime.now()
+        now = get_aware_utc_now()
         reservation1 = Mock()
         # one reservation object returns none
         reservation1.get_next_event_time.return_value = None
@@ -399,14 +402,14 @@ class TestReservationCheckAvailability:
 
     def test_empty_reservation_list(self, reservation):
         """Tests that empty reservation list returns empty set"""
-        now = datetime.now()
+        now = get_aware_utc_now()
         time_slot = TimeSlice(now, now + timedelta(hours=1))
         assert reservation.check_availability(
             time_slot) == set(), "Should return an empty set for no conflicts."
 
     def test_single_overlap(self, reservation):
         """ Tests that check availability correctly returns time slots affected by new overlapping times"""
-        start_time = datetime.now()
+        start_time = get_aware_utc_now()
         end_time = start_time + timedelta(hours=2)
         existing_time_slot = TimeSlice(start_time, end_time)
         reservation.time_slots.append(existing_time_slot)
@@ -431,13 +434,13 @@ class TestReservationMakeCurrent:
 
     def test_make_current_no_time_slots(self, reservation):
         """Test making calling with no time slots"""
-        now = datetime.now()
+        now = get_aware_utc_now()
         reservation.make_current(now)
         assert len(reservation.time_slots) == 0, "No time slots should remain if none were added."
 
     def test_make_current_future_time_slots_only(self, reservation):
         """Test calling make_current with a future time slot which should remain unchanged."""
-        now = datetime.now()
+        now = get_aware_utc_now()
         future_time_slot = TimeSlice(start=now + timedelta(hours=1), end=now + timedelta(hours=2))
         reservation.time_slots.append(future_time_slot)    # add times to time_slots
         reservation.make_current(now)
@@ -445,7 +448,7 @@ class TestReservationMakeCurrent:
 
     def test_make_current_past_time_slots_only(self, reservation):
         """Test calling reservation make_current with past time slot which should be removed"""
-        now = datetime.now()
+        now = get_aware_utc_now()
         past_time_slot = TimeSlice(start=now - timedelta(hours=2), end=now - timedelta(hours=1))
         reservation.time_slots.append(past_time_slot)
         reservation.make_current(now)
@@ -453,7 +456,7 @@ class TestReservationMakeCurrent:
 
     def test_make_current_mixed_time_slots(self, reservation):
         """Tests callimg make current with 1 old, and one future task"""
-        now = datetime.now()
+        now = get_aware_utc_now()
         past_time_slot = TimeSlice(start=now - timedelta(hours=2), end=now - timedelta(hours=1))
         future_time_slot = TimeSlice(start=now + timedelta(hours=1), end=now + timedelta(hours=2))
         reservation.time_slots.extend([past_time_slot, future_time_slot])
@@ -490,12 +493,12 @@ class TestReservationGetNextEventTime:
         return Reservation()
 
     def test_get_next_event_time_no_slots(self, reservation):
-        now = datetime.now()
+        now = get_aware_utc_now()
         assert reservation.get_next_event_time(
             now) is None, "Should return None when there are no time slots."
 
     def test_get_next_event_time_future_slots(self, reservation):
-        now = datetime.now()
+        now = get_aware_utc_now()
         future_start = now + timedelta(hours=1)
         future_end = now + timedelta(hours=2)
         reservation.time_slots.append(TimeSlice(start=future_start, end=future_end))
@@ -512,7 +515,7 @@ class TestReservationGetCurrentSlot:
     @pytest.fixture
     def reservation(self):
         res = Reservation()
-        now = datetime.now()
+        now = get_aware_utc_now()
         res.time_slots.append(
             TimeSlice(start=now - timedelta(hours=1),
                       end=now + timedelta(hours=1)))    # Active slot
@@ -523,7 +526,7 @@ class TestReservationGetCurrentSlot:
 
     def test_get_current_slot_inside_slot(self, reservation):
         """Tests getting a timeslot """
-        now = datetime.now()
+        now = get_aware_utc_now()
         current_slot = reservation.get_current_slot(now)
         assert current_slot != None, "Should return a current time slot"
         assert current_slot.start <= now, "Now should be after the start of the returned time slot."
@@ -531,14 +534,14 @@ class TestReservationGetCurrentSlot:
 
     def test_get_current_slot_outside_slot(self, reservation):
         """Tets trying to get current slot outside any current time slot"""
-        now = datetime.now() + timedelta(hours=4)    # Outside any defined slots
+        now = get_aware_utc_now() + timedelta(hours=4)    # Outside any defined slots
         current_slot = reservation.get_current_slot(now)
         assert current_slot == None, "Should return None when now is outside any slot."
 
     def test_get_current_slot_no_slots(self):
         """Calling with just reservation that has no slots added"""
         reservation = Reservation()    # no slots added
-        now = datetime.now()
+        now = get_aware_utc_now()
         current_slot = reservation.get_current_slot(now)
         assert current_slot == None, "Should return none when there are no time slots"
 
@@ -548,7 +551,7 @@ class TestReservationPruneToCurrent:
     @pytest.fixture
     def reservation(self):
         res = Reservation()
-        now = datetime.now()
+        now = get_aware_utc_now()
         res.time_slots.append(
             TimeSlice(start=now - timedelta(hours=1),
                       end=now + timedelta(hours=1)))    # Past to future
@@ -559,7 +562,7 @@ class TestReservationPruneToCurrent:
 
     def test_prune_to_current_no_active_slot(self, reservation):
         """Test that all slots are cleared if no current slot is active."""
-        now = datetime.now() + timedelta(hours=4)    # Time beyond all slots
+        now = get_aware_utc_now() + timedelta(hours=4)    # Time beyond all slots
         grace_time = timedelta(minutes=30)
         reservation.prune_to_current(grace_time, now)
 
@@ -567,7 +570,7 @@ class TestReservationPruneToCurrent:
 
     def test_prune_to_current_active_slot_extending_beyond_grace_period(self, reservation):
         """Test that an active slot extending beyond the grace period is pruned correctly."""
-        now = datetime.now() + timedelta(minutes=10)    # 10 minutes from now
+        now = get_aware_utc_now() + timedelta(minutes=10)    # 10 minutes from now
         grace_time = timedelta(minutes=20)    # 20 minutes from now
         reservation.prune_to_current(grace_time, now)
         expected_end_time = now + grace_time    # should extend time
@@ -581,7 +584,7 @@ class TestReservationGetConflicts:
     @pytest.fixture
     def reservation(self):
         res = Reservation()
-        now = datetime.now()
+        now = get_aware_utc_now()
         # Setup predefined time slots
         res.time_slots.append(TimeSlice(start=now, end=now + timedelta(hours=1)))
         res.time_slots.append(
@@ -592,8 +595,8 @@ class TestReservationGetConflicts:
         """Tests no conflicts returned when checking  """
         other_reservation = Reservation()
         other_reservation.time_slots.append(
-            TimeSlice(start=datetime.now() + timedelta(hours=4),
-                      end=datetime.now() + timedelta(hours=5)))
+            TimeSlice(start=get_aware_utc_now() + timedelta(hours=4),
+                      end=get_aware_utc_now() + timedelta(hours=5)))
         conflicts = reservation.get_conflicts(other_reservation)
         assert len(conflicts) == 0, "There should be no conflicts."
 
@@ -601,11 +604,11 @@ class TestReservationGetConflicts:
         """Tests partial conflicts returned"""
         other_reservation = Reservation()
         other_reservation.time_slots.append(
-            TimeSlice(start=datetime.now() + timedelta(hours=4),
-                      end=datetime.now() + timedelta(hours=5)))
+            TimeSlice(start=get_aware_utc_now() + timedelta(hours=4),
+                      end=get_aware_utc_now() + timedelta(hours=5)))
         other_reservation.time_slots.append(
-            TimeSlice(start=datetime.now() + timedelta(minutes=30),
-                      end=datetime.now() + timedelta(hours=1, minutes=30)))
+            TimeSlice(start=get_aware_utc_now() + timedelta(minutes=30),
+                      end=get_aware_utc_now() + timedelta(hours=1, minutes=30)))
         conflicts = reservation.get_conflicts(other_reservation)
         assert len(conflicts) == 1, "There should be one conflict."
 
@@ -613,10 +616,10 @@ class TestReservationGetConflicts:
         """Tests conflicts with our fixture and appended times"""
         other_reservation = Reservation()
         other_reservation.time_slots.append(
-            TimeSlice(start=datetime.now(), end=datetime.now() + timedelta(hours=1)))
+            TimeSlice(start=get_aware_utc_now(), end=get_aware_utc_now() + timedelta(hours=1)))
         other_reservation.time_slots.append(
-            TimeSlice(start=datetime.now() + timedelta(hours=2),
-                      end=datetime.now() + timedelta(hours=3)))
+            TimeSlice(start=get_aware_utc_now() + timedelta(hours=2),
+                      end=get_aware_utc_now() + timedelta(hours=3)))
         conflicts = reservation.get_conflicts(other_reservation)
         assert len(conflicts) == 2, "There should be two conflicts."
 
@@ -657,8 +660,6 @@ class TestReservationManagerUpdate:
         reservation_manager._get_adjusted_next_event_time.assert_called_once_with(
             mock_now, future_time, None), "get_adjusted_next_event_time should be called once"
         assert reservation_manager._update_event_time == future_time, "Updated event time should be the future time"
-
-        #TODO add more tests for update
 
 
 class TestReservationManagerGetAdjustedNextEventTime:
@@ -1020,7 +1021,7 @@ class TestReservationManagerGetReservationState:
         task = Mock()
         task.agent_id = "agent1"
         task.get_current_slots = MagicMock(
-            return_value={"device1": Mock(end=datetime.now() + timedelta(minutes=5))})
+            return_value={"device1": Mock(end=get_aware_utc_now() + timedelta(minutes=5))})
 
         # add tasks to running and preempted sets
         rm.tasks = {"task1": task}
@@ -1032,7 +1033,7 @@ class TestReservationManagerGetReservationState:
 
     def test_get_reservation_state(self, reservation_manager):
         """Tests that get reservation state returns the correct reservation state"""
-        now = datetime.now()
+        now = get_aware_utc_now()
         result = reservation_manager.get_reservation_state(now)
 
         reservation_manager._cleanup.assert_called_once_with(
@@ -1052,12 +1053,12 @@ class TestReservationGetNextEventTime:
         return Reservation()
 
     def test_get_next_event_time_no_slots(self, reservation):
-        now = datetime.now()
+        now = get_aware_utc_now()
         assert reservation.get_next_event_time(
             now) is None, "Should return None when there are no time slots."
 
     def test_get_next_event_time_future_slots(self, reservation):
-        now = datetime.now()
+        now = get_aware_utc_now()
         future_start = now + timedelta(hours=1)
         future_end = now + timedelta(hours=2)
         reservation.time_slots.append(TimeSlice(start=future_start, end=future_end))
@@ -1070,7 +1071,7 @@ class TestReservationGetNextEventTime:
 
     def test_get_next_event_time_during_active_slot(self, reservation):
         """Tests get_next_event_time returns the most recent end time, indicating the next even time"""
-        now = datetime.now()
+        now = get_aware_utc_now()
         active_start = now - timedelta(minutes=30)    # 30 minutes ago
         active_end = now + timedelta(minutes=30)    # 30 minutes from now
         reservation.time_slots.append(TimeSlice(start=active_start, end=active_end))
