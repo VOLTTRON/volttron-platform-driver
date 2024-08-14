@@ -13,18 +13,21 @@ class TestTimeSliceStretchToInclude:
     now = get_aware_utc_now()
 
     def test_start_is_none(self):
+        """Tests calling stretch_to_include with start as None in time slice 1"""
         ts1 = TimeSlice(start=None, end=self.now + timedelta(hours=2))
         ts2 = TimeSlice(start=self.now + timedelta(hours=1), end=self.now + timedelta(hours=3))
         ts1.stretch_to_include(ts2)
         assert ts1.start == ts2.start, "start should be updated to ts2's start"
 
     def test_end_is_none(self):
+        """Tests calling stretch_to_include with end as None in time slice 1"""
         ts1 = TimeSlice(start=self.now, end=None)
         ts2 = TimeSlice(start=self.now - timedelta(hours=1), end=self.now + timedelta(hours=1))
         ts1.stretch_to_include(ts2)
         assert ts1.end == ts2.end, "end should be updated to ts2's end"
 
     def test_extend_before_start(self):
+        """Tests that stretch_to_include correctly updates the start time to the earlier TimeSlice."""
         ts = TimeSlice(start=self.now + timedelta(hours=2), end=self.now + timedelta(hours=3))
         time_slice = TimeSlice(start=self.now + timedelta(hours=1),
                                end=self.now + timedelta(hours=2))
@@ -32,13 +35,15 @@ class TestTimeSliceStretchToInclude:
         assert ts.start == time_slice.start, "start should be updated to time_slice's start"
 
     def test_extend_after_end(self):
-        ts = TimeSlice(start=self.now - timedelta(hours=2), end=self.now)
+        """Tests that stretch_to_include correctly updates the end time to the later TimeSlice."""
+        ts = TimeSlice(start=self.now - timedelta(hours=2), end=self.now)    # ended now
         time_slice = TimeSlice(start=self.now - timedelta(hours=2),
                                end=self.now + timedelta(hours=2))
         ts.stretch_to_include(time_slice)
         assert ts.end == time_slice.end, "end should be updated to time_slice's end"
 
     def test_within_current_timeslice(self):
+        """Tests a timeslice within another time slice not changing either"""
         ts = TimeSlice(start=self.now, end=self.now + timedelta(hours=4))
         new_ts = TimeSlice(start=self.now + timedelta(hours=1), end=self.now + timedelta(hours=2))
         ts.stretch_to_include(new_ts)
