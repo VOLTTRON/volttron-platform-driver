@@ -42,7 +42,7 @@ class TestPlatformDriverAgentLoadVersionedConfig:
 
     def test_deprecation_warning_for_old_config_versions(self, PDA, caplog):
         config_old_version = {'config_version': 1}
-        result = PDA._load_versioned_config(config_old_version)
+        PDA._load_versioned_config(config_old_version)
         assert "Deprecation Warning" in caplog.text
 
 
@@ -642,7 +642,7 @@ class TestGetPoint:
 
         kwargs = {'topic': 'device/topic', 'point': 'SampleWritableFloat'}
 
-        result = PDA.get_point(path=None, point_name=None, **kwargs)
+        PDA.get_point(path=None, point_name=None, **kwargs)
 
         PDA._equipment_id.assert_called_with('device/topic', 'SampleWritableFloat')
 
@@ -1106,81 +1106,93 @@ class TestEquipmentId:
         assert result == "devices/some/path/point"
 
     def test_equipment_id_no_point(self, PDA):
+        """Tests calling equipment_id with no point."""
         result = PDA._equipment_id("some/path")
         assert result == "devices/some/path"
 
     def test_equipment_id_leading_trailing_slashes(self, PDA):
+        """Tests calling equipment_id with leading and trailing slashes."""
         result = PDA._equipment_id("/some/path/", "point")
         assert result == "devices/some/path/point"
 
     def test_equipment_id_no_point_leading_trailing_slashes(self, PDA):
+        """Tests calling equipment_id with leading and trailing slashes and no point"""
         result = PDA._equipment_id("/some/path/")
         assert result == "devices/some/path"
 
     def test_equipment_id_path_with_root(self, PDA):
+        """Tests calling equipment_id with root in a path."""
         result = PDA._equipment_id("devices/some/path", "point")
         assert result == "devices/some/path/point"
 
     def test_equipment_id_path_with_root_no_point(self, PDA):
+        """Tests calling equipment_id with root and no point"""
         result = PDA._equipment_id("devices/some/path")
         assert result == "devices/some/path"
 
     def test_equipment_id_only_path(self, PDA):
+        """Tests calling equipment_id with only path, no point or root"""
         result = PDA._equipment_id("some/path")
         assert result == "devices/some/path"
 
 
 class TestGetHeaders:
     """Tests for _get_headers in the PlatformDriverAgent class."""
+    now = get_aware_utc_now()
 
     def test_get_headers_no_optional(self):
-        requester = "test_requester"
-        now = get_aware_utc_now()
-        formatted_now = format_timestamp(now)
-        result = PlatformDriverAgent()._get_headers(requester=requester, time=now)
-        assert result == {'time': formatted_now, 'requesterID': requester, 'type': None}
+        """Tests _get_headers with time as now"""
+        formatted_now = format_timestamp(self.now)
+        result = PlatformDriverAgent()._get_headers(requester="test_requester", time=self.now)
+        assert result == {'time': formatted_now, 'requesterID': "test_requester", 'type': None}
 
     def test_get_headers_with_time(self):
-        requester = "test_requester"
         custom_time = datetime(2024, 7, 25, 18, 52, 29, 37938)
         formatted_custom_time = format_timestamp(custom_time)
-        result = PlatformDriverAgent()._get_headers(requester, time=custom_time)
-        assert result == {'time': formatted_custom_time, 'requesterID': requester, 'type': None}
+        result = PlatformDriverAgent()._get_headers("test_requester", time=custom_time)
+        assert result == {
+            'time': formatted_custom_time,
+            'requesterID': "test_requester",
+            'type': None
+        }
 
     def test_get_headers_with_task_id(self):
-        requester = "test_requester"
         task_id = "task123"
-        now = get_aware_utc_now()
-        formatted_now = format_timestamp(now)
-        result = PlatformDriverAgent()._get_headers(requester, time=now, task_id=task_id)
+        formatted_now = format_timestamp(self.now)
+        result = PlatformDriverAgent()._get_headers(requester="test_requester",
+                                                    time=self.now,
+                                                    task_id=task_id)
         assert result == {
             'time': formatted_now,
-            'requesterID': requester,
+            'requesterID': "test_requester",
             'taskID': task_id,
             'type': None
         }
 
     def test_get_headers_with_action_type(self):
-        requester = "test_requester"
         action_type = "NEW_SCHEDULE"
-        now = get_aware_utc_now()
-        formatted_now = format_timestamp(now)
-        result = PlatformDriverAgent()._get_headers(requester, time=now, action_type=action_type)
-        assert result == {'time': formatted_now, 'requesterID': requester, 'type': action_type}
+        formatted_now = format_timestamp(self.now)
+        result = PlatformDriverAgent()._get_headers(requester="test_requester",
+                                                    time=self.now,
+                                                    action_type=action_type)
+        assert result == {
+            'time': formatted_now,
+            'requesterID': "test_requester",
+            'type': action_type
+        }
 
     def test_get_headers_all_optional(self):
-        requester = "test_requester"
         custom_time = datetime(2024, 7, 25, 18, 52, 29, 37938)
         formatted_custom_time = format_timestamp(custom_time)
         task_id = "task123"
         action_type = "NEW_SCHEDULE"
-        result = PlatformDriverAgent()._get_headers(requester,
+        result = PlatformDriverAgent()._get_headers(requester="test_requester",
                                                     time=custom_time,
                                                     task_id=task_id,
                                                     action_type=action_type)
         assert result == {
             'time': formatted_custom_time,
-            'requesterID': requester,
+            'requesterID': "test_requester",
             'taskID': task_id,
             'type': action_type
         }
