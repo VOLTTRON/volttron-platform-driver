@@ -4,6 +4,7 @@ from datetime import datetime
 
 from volttron.utils import format_timestamp, get_aware_utc_now
 from platform_driver.agent import PlatformDriverAgent
+from platform_driver.constants import VALUE_RESPONSE_PREFIX
 
 
 # TODO delete if not readded by dave
@@ -41,6 +42,7 @@ class TestPlatformDriverAgentLoadVersionedConfig:
         assert result_v2.publish_depth_first_any == True
 
     def test_deprecation_warning_for_old_config_versions(self, PDA, caplog):
+        """Tests that a deprecation warning shows up when old config is used"""
         config_old_version = {'config_version': 1}
         PDA._load_versioned_config(config_old_version)
         assert "Deprecation Warning" in caplog.text
@@ -494,6 +496,47 @@ class TestPlatformDriverAgentNewReservation:
                                                                         publish_result=False)
 
 
+class TestHandleGet:
+    sender = "test.agent"
+    topic = "devices/actuators/get/device1/SampleWritableFloat1"
+
+    @pytest.fixture
+    def PDA(self):
+        PDA = PlatformDriverAgent()
+
+        # Mock 'vip' components
+        PDA.vip = MagicMock()
+        PDA.vip.rpc.context = MagicMock()
+        PDA.vip.rpc.context.vip_message.peer = self.sender
+
+        PDA._equipment_id = Mock(return_value="processed_point_name")
+
+        # Mock 'equipment_tree.get_node'
+        node_mock = MagicMock()
+        PDA.equipment_tree = MagicMock()
+        PDA.equipment_tree.get_node = Mock(return_value=node_mock)
+
+        PDA._get_headers = Mock(return_value={})
+        PDA._push_result_topic_pair = Mock()
+
+        PDA.get_point = Mock()
+        PDA.get_point.return_value = 42.0
+        PDA._push_result_topic_pair = Mock()
+
+        return PDA
+
+    def test_handle_get_calls_get_point_with_correct_parameters(self, PDA):
+        """Test handle_get calls get_point with correct parameters."""
+        PDA.handle_get(None, self.sender, None, self.topic, None, None)
+        PDA.get_point.assert_called_with("device1/SampleWritableFloat1")
+
+    def test_handle_get_calls__push_result_topic_pair_with_correct_parameters(self, PDA):
+        """Test handle_get calls push_result_topic_pair with correct values """
+        PDA.handle_get(None, self.sender, None, self.topic, None, None)
+        PDA._push_result_topic_pair.assert_called_with(VALUE_RESPONSE_PREFIX,
+                                                       "device1/SampleWritableFloat1", {}, 42.0)
+
+
 class TestHandleSet:
     sender = "test.agent"
     topic = "devices/actuators/set/device1/SampleWritableFloat1"
@@ -527,39 +570,6 @@ class TestHandleSet:
         """Test handle_set calls set_point with correct parameters"""
         PDA.handle_set(None, self.sender, None, self.topic, None, self.message)
         PDA.set_point.assert_called_with("device1/SampleWritableFloat1", None, self.message)
-
-
-class TestHandleGet:
-    sender = "test.agent"
-    topic = "devices/actuators/get/device1/SampleWritableFloat1"
-
-    @pytest.fixture
-    def PDA(self):
-        PDA = PlatformDriverAgent()
-
-        # Mock 'vip' components
-        PDA.vip = MagicMock()
-        PDA.vip.rpc.context = MagicMock()
-        PDA.vip.rpc.context.vip_message.peer = self.sender
-
-        PDA._equipment_id = Mock(return_value="processed_point_name")
-
-        # Mock 'equipment_tree.get_node'
-        node_mock = MagicMock()
-        PDA.equipment_tree = MagicMock()
-        PDA.equipment_tree.get_node = Mock(return_value=node_mock)
-
-        PDA._get_headers = Mock(return_value={})
-        PDA._push_result_topic_pair = Mock()
-
-        PDA.get_point = Mock()
-
-        return PDA
-
-    def test_handle_get_calls_get_point_with_correct_parameters(self, PDA):
-        """Test handle_get calls get_point with correct parameters."""
-        PDA.handle_get(None, self.sender, None, self.topic, None, None)
-        PDA.get_point.assert_called_with("device1/SampleWritableFloat1")
 
 
 class TestGetPoint:
@@ -613,7 +623,6 @@ class TestGetPoint:
 
     def test_get_point_with_combined_path_and_empty_point(self, PDA):
         """Test handling of path containing the point name and point_name is empty"""
-        # TODO again, is it supposed to get rid of None? does it still work?
         kwargs = {}
         PDA.get_point(path='device/topic/SampleWritableFloat', point_name=None, **kwargs)
         PDA._equipment_id.assert_called_with("device/topic/SampleWritableFloat", None)
@@ -715,6 +724,7 @@ class TestSetPoint:
         PDA._equipment_id.assert_called_with("device/topic/SampleWritableFloat", None)
 
     def test_set_point_raises_error_for_invalid_node(self, PDA):
+        """Tests that setpoint raises a ValueError exception"""
         # Mock get_node to return None
         PDA.equipment_tree.get_node.return_value = None
         kwargs = {}
