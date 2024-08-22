@@ -4,7 +4,7 @@ from datetime import datetime
 
 from volttron.utils import format_timestamp, get_aware_utc_now
 from platform_driver.agent import PlatformDriverAgent
-from platform_driver.constants import VALUE_RESPONSE_PREFIX
+from platform_driver.constants import VALUE_RESPONSE_PREFIX, RESERVATION_RESULT_TOPIC
 
 
 # TODO delete if not readded by dave
@@ -1092,12 +1092,43 @@ class TestHandleReservationRequest:
 
     @pytest.fixture
     def PDA(self):
-        """Fixture to set up a PlatformDriverAgent with necessary mocks."""
-        agent = PlatformDriverAgent()
-        agent._get_headers = Mock()
-        agent.reservation_manager = Mock()
-        agent.vip.pubsub.publish = Mock()
-        return agent
+        PDA = PlatformDriverAgent()
+
+        # Mock dependencies
+        PDA.vip = MagicMock()
+        PDA.vip.pubsub.publish = MagicMock()
+        PDA._get_headers = Mock()
+        PDA.reservation_manager = Mock()
+        PDA._handle_unknown_reservation_error = Mock()
+
+        return PDA
+
+    def test_handle_reservation_request_calls_publish_pubsub(self, PDA):
+        """Tests that it calls pubsub.publish when result.success is true"""
+        headers = {'type': 'NEW_RESERVATION', 'taskID': 'task1', 'priority': 1}
+        message = ['request1']
+
+        result = Mock()
+        result.success = True
+        result.data = []
+        result.info_string = ''
+
+        PDA._get_headers.return_value = {}
+        PDA.reservation_manager.new_task.return_value = result
+
+        PDA.handle_reservation_request(None, 'sender', None, 'topic', headers, message)
+
+        PDA.vip.pubsub.publish.assert_called_with('pubsub',
+                                                  topic=RESERVATION_RESULT_TOPIC,
+                                                  headers={},
+                                                  message={
+                                                      'result': 'SUCCESS',
+                                                      'data': {},
+                                                      'info': ''
+                                                  })
+
+    def test_handle_reservation_reservation_failure(self, PDA):
+        pass
 
 
 class TestEquipmentId:
