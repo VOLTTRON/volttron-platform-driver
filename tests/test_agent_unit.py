@@ -797,8 +797,7 @@ class TestRevertPoint:
         """Test normal case for reverting a point."""
         PDA.revert_point(self.path, self.point_name)
 
-        PDA._equipment_id.assert_called_with(self.path, 'devices/device1/SampleWritableFloat1'
-                                             )    # TODO not sure why this is returning what it is
+        PDA._equipment_id.assert_called_with(self.path, 'devices/device1/SampleWritableFloat1')
         PDA.equipment_tree.get_node.assert_called_with("devices/device1/SampleWritableFloat1")
         PDA.equipment_tree.get_node().get_remote.return_value.revert_point.assert_called_with(
             "devices/device1/SampleWritableFloat1")
