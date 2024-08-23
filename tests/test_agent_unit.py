@@ -496,82 +496,6 @@ class TestPlatformDriverAgentNewReservation:
                                                                         publish_result=False)
 
 
-class TestHandleGet:
-    sender = "test.agent"
-    topic = "devices/actuators/get/device1/SampleWritableFloat1"
-
-    @pytest.fixture
-    def PDA(self):
-        PDA = PlatformDriverAgent()
-
-        # Mock 'vip' components
-        PDA.vip = MagicMock()
-        PDA.vip.rpc.context = MagicMock()
-        PDA.vip.rpc.context.vip_message.peer = self.sender
-
-        PDA._equipment_id = Mock(return_value="processed_point_name")
-
-        # Mock 'equipment_tree.get_node'
-        node_mock = MagicMock()
-        PDA.equipment_tree = MagicMock()
-        PDA.equipment_tree.get_node = Mock(return_value=node_mock)
-
-        PDA._get_headers = Mock(return_value={})
-        PDA._push_result_topic_pair = Mock()
-
-        PDA.get_point = Mock()
-        PDA.get_point.return_value = 42.0
-        PDA._push_result_topic_pair = Mock()
-
-        return PDA
-
-    def test_handle_get_calls_get_point_with_correct_parameters(self, PDA):
-        """Test handle_get calls get_point with correct parameters."""
-        PDA.handle_get(None, self.sender, None, self.topic, None, None)
-        PDA.get_point.assert_called_with("device1/SampleWritableFloat1")
-
-    def test_handle_get_calls__push_result_topic_pair_with_correct_parameters(self, PDA):
-        """Test handle_get calls push_result_topic_pair with correct values """
-        PDA.handle_get(None, self.sender, None, self.topic, None, None)
-        PDA._push_result_topic_pair.assert_called_with(VALUE_RESPONSE_PREFIX,
-                                                       "device1/SampleWritableFloat1", {}, 42.0)
-
-
-class TestHandleSet:
-    sender = "test.agent"
-    topic = "devices/actuators/set/device1/SampleWritableFloat1"
-    message = 0.2
-
-    @pytest.fixture
-    def PDA(self):
-        PDA = PlatformDriverAgent()
-
-        PDA.vip = MagicMock()
-        PDA.vip.rpc.context = MagicMock()
-        PDA.vip.rpc.context.vip_message.peer = self.sender
-
-        PDA._equipment_id = Mock(return_value="processed_point_name")
-
-        # Mock 'equipment_tree.get_node'
-        node_mock = MagicMock()
-        PDA.equipment_tree = MagicMock()
-        PDA.equipment_tree.get_node = Mock(return_value=node_mock)
-
-        PDA._get_headers = Mock(return_value={})
-        PDA._push_result_topic_pair = Mock()
-
-        PDA.set_point = Mock()
-
-        PDA._push_result_topic_pair = Mock()
-        PDA.get_point = Mock()
-        return PDA
-
-    def test_handle_set_calls_set_point_with_correct_parameters(self, PDA):
-        """Test handle_set calls set_point with correct parameters"""
-        PDA.handle_set(None, self.sender, None, self.topic, None, self.message)
-        PDA.set_point.assert_called_with("device1/SampleWritableFloat1", None, self.message)
-
-
 class TestGetPoint:
     sender = "test.agent"
     path = "devices/device1"
@@ -943,6 +867,47 @@ class TestRevertDevice:
         get_node_mock.get_remote().revert_all.assert_called_with()
 
 
+class TestHandleGet:
+    sender = "test.agent"
+    topic = "devices/actuators/get/device1/SampleWritableFloat1"
+
+    @pytest.fixture
+    def PDA(self):
+        PDA = PlatformDriverAgent()
+
+        # Mock 'vip' components
+        PDA.vip = MagicMock()
+        PDA.vip.rpc.context = MagicMock()
+        PDA.vip.rpc.context.vip_message.peer = self.sender
+
+        PDA._equipment_id = Mock(return_value="processed_point_name")
+
+        # Mock 'equipment_tree.get_node'
+        node_mock = MagicMock()
+        PDA.equipment_tree = MagicMock()
+        PDA.equipment_tree.get_node = Mock(return_value=node_mock)
+
+        PDA._get_headers = Mock(return_value={})
+        PDA._push_result_topic_pair = Mock()
+
+        PDA.get_point = Mock()
+        PDA.get_point.return_value = 42.0
+        PDA._push_result_topic_pair = Mock()
+
+        return PDA
+
+    def test_handle_get_calls_get_point_with_correct_parameters(self, PDA):
+        """Test handle_get calls get_point with correct parameters."""
+        PDA.handle_get(None, self.sender, None, self.topic, None, None)
+        PDA.get_point.assert_called_with("device1/SampleWritableFloat1")
+
+    def test_handle_get_calls__push_result_topic_pair_with_correct_parameters(self, PDA):
+        """Test handle_get calls push_result_topic_pair with correct values """
+        PDA.handle_get(None, self.sender, None, self.topic, None, None)
+        PDA._push_result_topic_pair.assert_called_with(VALUE_RESPONSE_PREFIX,
+                                                       "device1/SampleWritableFloat1", {}, 42.0)
+
+
 class TestHandleSet:
     sender = "test.sender"
     topic = "devices/actuators/set/device1/point1"
@@ -1189,6 +1154,7 @@ class TestEquipmentId:
         return agent
 
     def test_equipment_id_basic(self, PDA):
+        """Normal call"""
         result = PDA._equipment_id("some/path", "point")
         assert result == "devices/some/path/point"
 
