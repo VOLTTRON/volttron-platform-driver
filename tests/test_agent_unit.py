@@ -1111,7 +1111,7 @@ class TestHandleReservationRequest:
 
         result = Mock()
         result.success = True
-        result.data = []
+        result.data = {}
         result.info_string = ''
 
         PDA._get_headers.return_value = {}
@@ -1135,7 +1135,7 @@ class TestHandleReservationRequest:
 
         result = Mock()
         result.success = True
-        result.data = []
+        result.data = {}
         result.info_string = ''
 
         PDA._get_headers.return_value = {}
@@ -1148,6 +1148,30 @@ class TestHandleReservationRequest:
                                                   headers={},
                                                   message={
                                                       'result': 'SUCCESS',
+                                                      'data': {},
+                                                      'info': ''
+                                                  })
+
+    def test_handle_reservation_request_calls_publish_pubsub(self, PDA):
+        """Tests that it calls pubsub.publish when new_task result responds with failed"""
+        headers = {'type': 'NEW_RESERVATION', 'taskID': 'task1', 'priority': 1}
+        message = ['request1']
+
+        result = Mock()
+        result.success = False
+        result.data = {}
+        result.info_string = ''
+
+        PDA._get_headers.return_value = {}
+        PDA.reservation_manager.new_task.return_value = result
+
+        PDA.handle_reservation_request(None, 'sender', None, 'topic', headers, message)
+
+        PDA.vip.pubsub.publish.assert_called_with('pubsub',
+                                                  topic=RESERVATION_RESULT_TOPIC,
+                                                  headers={},
+                                                  message={
+                                                      'result': 'FAILURE',
                                                       'data': {},
                                                       'info': ''
                                                   })
