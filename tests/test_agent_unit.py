@@ -1100,11 +1100,12 @@ class TestHandleReservationRequest:
         PDA._get_headers = Mock()
         PDA.reservation_manager = Mock()
         PDA._handle_unknown_reservation_error = Mock()
+        PDA.reservation_manager.cancel_reservation = Mock()
 
         return PDA
 
     def test_handle_reservation_request_calls_publish_pubsub(self, PDA):
-        """Tests that it calls pubsub.publish when result.success is true"""
+        """Tests that it calls pubsub.publish when result type is new reservation"""
         headers = {'type': 'NEW_RESERVATION', 'taskID': 'task1', 'priority': 1}
         message = ['request1']
 
@@ -1127,8 +1128,29 @@ class TestHandleReservationRequest:
                                                       'info': ''
                                                   })
 
-    def test_handle_reservation_reservation_failure(self, PDA):
-        pass
+    def test_handle_reservation_reservation_action_cancel(self, PDA):
+        """Tests that it calls pubsub.publish when result type is cancel reservation"""
+        headers = {'type': 'CANCEL_RESERVATION', 'taskID': 'task1', 'priority': 1}
+        message = ['request1']
+
+        result = Mock()
+        result.success = True
+        result.data = []
+        result.info_string = ''
+
+        PDA._get_headers.return_value = {}
+        PDA.reservation_manager.cancel_reservation.return_value = result
+
+        PDA.handle_reservation_request(None, 'sender', None, 'topic', headers, message)
+
+        PDA.vip.pubsub.publish.assert_called_with('pubsub',
+                                                  topic=RESERVATION_RESULT_TOPIC,
+                                                  headers={},
+                                                  message={
+                                                      'result': 'SUCCESS',
+                                                      'data': {},
+                                                      'info': ''
+                                                  })
 
 
 class TestEquipmentId:
