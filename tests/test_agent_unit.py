@@ -1,9 +1,9 @@
 import pytest
-from unittest.mock import MagicMock, Mock
+from unittest.mock import MagicMock, Mock, patch
 from datetime import datetime
 
 from volttron.utils import format_timestamp, get_aware_utc_now
-from platform_driver.agent import PlatformDriverAgent
+from platform_driver.agent import PlatformDriverAgent, PlatformDriverConfigV1
 from platform_driver.constants import VALUE_RESPONSE_PREFIX, RESERVATION_RESULT_TOPIC
 
 
@@ -52,17 +52,29 @@ class TestPlatformDriverAgentConfigureMain:
 
     @pytest.fixture
     def PDA(self):
-        from platform_driver.agent import PlatformDriverAgent
-        agent = PlatformDriverAgent()
-        agent.vip = Mock()
-        agent.config = Mock()
-        agent.remote_heartbeat_interval = Mock()
-        agent.heartbeat_greenlet = Mock()
-        agent.poll_scheduler = Mock()
-        agent.reservation_manager = Mock()
-        agent.override_manager = Mock()
-        agent.scalability_test = Mock()
-        return agent
+        PDA = PlatformDriverAgent()
+        PDA.core = MagicMock()
+        PDA.vip = MagicMock()
+
+        PDA.vip.config.get = Mock(return_value='{}')
+
+        return PDA
+
+    def test_configure_main_calls(self, PDA):
+        """Tests the configure main calls setup_socket_lock and configure_publish_lock when action is new"""
+        with patch('platform_driver.agent.setup_socket_lock') as mock_setup_socket_lock, \
+             patch('platform_driver.agent.configure_publish_lock') as mock_configure_publish_lock:
+            contents = {'config_version': 2, 'publish_depth_first_any': True}
+            PDA.configure_main(_="", action="NEW", contents=contents)
+            mock_setup_socket_lock.assert_called_once()
+            mock_configure_publish_lock.assert_called_once()
+
+    def test_configure_main_calls(self, PDA):
+        """Tests the configure main calls setup_socket_lock and configure_publish_lock when action is new"""
+        with patch('platform_driver.agent.importlib.import_module') as mock_setup_socket_lock:
+            contents = {'config_version': 2, 'publish_depth_first_any': True}
+            PDA.configure_main(_="", action="NEW", contents=contents)
+            mock_setup_socket_lock.assert_called_once()
 
 
 class TestPlatformDriverAgentConfigureNewEquipment:
