@@ -60,7 +60,7 @@ class TestPlatformDriverAgentConfigureMain:
 
         return PDA
 
-    def test_configure_main_calls(self, PDA):
+    def test_configure_main_calls_configure_publish_lock(self, PDA):
         """Tests the configure main calls setup_socket_lock and configure_publish_lock when action is new"""
         with patch('platform_driver.agent.setup_socket_lock') as mock_setup_socket_lock, \
              patch('platform_driver.agent.configure_publish_lock') as mock_configure_publish_lock:
@@ -69,8 +69,8 @@ class TestPlatformDriverAgentConfigureMain:
             mock_setup_socket_lock.assert_called_once()
             mock_configure_publish_lock.assert_called_once()
 
-    def test_configure_main_calls(self, PDA):
-        """Tests the configure main calls setup_socket_lock and configure_publish_lock when action is new"""
+    def test_configure_main_calls_importlib(self, PDA):
+        """Tests the configure main calls importlib when action is new"""
         with patch('platform_driver.agent.importlib.import_module') as mock_setup_socket_lock:
             contents = {'config_version': 2, 'publish_depth_first_any': True}
             PDA.configure_main(_="", action="NEW", contents=contents)
