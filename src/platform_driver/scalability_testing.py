@@ -20,7 +20,7 @@ class ScalabilityTester:
         self.test_results = []
         self.current_test_start = None
 
-    def scrape_starting(self, topic):
+    def poll_starting(self, topic):
         if not self.waiting_to_finish:
             # Start a new measurement
             self.current_test_start = datetime.now()
@@ -32,7 +32,7 @@ class ScalabilityTester:
                 f"{topic} started twice before test finished, increase the length of scrape interval and rerun test"
             )
 
-    def scrape_ending(self, topic):
+    def poll_ending(self, topic):
         try:
             self.waiting_to_finish.remove(topic)
         except KeyError:
