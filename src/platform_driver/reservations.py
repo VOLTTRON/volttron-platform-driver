@@ -23,8 +23,12 @@
 # }}}
 
 import bisect
+import json
 import logging
+import pickle
+import base64
 
+from base64 import b64encode
 from collections import defaultdict, namedtuple
 from copy import deepcopy
 from datetime import timedelta
@@ -68,11 +72,11 @@ class TimeSlice(object):
 
     @property
     def end(self):
-        return self.end
+        return self._end
 
     @property
     def start(self):
-        return self.start
+        return self._start
 
     def __cmp__(self, other):
         if self.start >= other.end:
@@ -122,7 +126,6 @@ class Task(object):
         self.time_slice = TimeSlice()
         self.devices = defaultdict(Reservation)
         self.state = Task.STATE_PRE_RUN
-
         self.populate_reservation(requests)
 
     def change_state(self, new_state):
@@ -265,8 +268,7 @@ class Reservation(object):
         self.make_current(now)
         if not self.time_slots:
             return None
-        _log.debug("in reservation get_next_event_time timeslots {} now {}".format(
-            self.time_slots[0], now))
+        _log.debug(f"in reservation get_next_event_time timeslots {self.time_slots[0]} now {now}")
         next_time = self.time_slots[0].end if self.time_slots[0].contains_include_start(
             now) else self.time_slots[0].start
         # Round to the next second to fix timer goofiness in agent timers.
@@ -276,6 +278,9 @@ class Reservation(object):
         return next_time
 
     def get_current_slot(self, now):
+        """
+        Determines if "now" falls within any scheduled time slots and returns the current active slot, or None if no slot is active
+        """
         self.make_current(now)
         if not self.time_slots:
             return None
@@ -424,20 +429,24 @@ class ReservationManager(object):
         try:
             self.tasks = loads(initial_state_string)
             self._cleanup(now)
-        except Exception:
+        except pickle.PickleError as pe:
             self.tasks = {}
-            _log.error('Reservation Manager state file corrupted!')
+            _log.error(f'Pickle error {pe}')
+        except Exception as e:
+            self.tasks = {}
+            _log.error(f'Reservation Manager state file corrupted! Exception {e}')
 
     def save_state(self, now):
         try:
             self._cleanup(now)
-            _log.debug("Saving reservation state")
-            self.parent.vip.config.set(self.reservation_state_file, dumps(self.tasks), send_update=False)
+            _log.debug(f"Saving {len(self.tasks)} task")
+            self.parent.vip.config.set(self.reservation_state_file, b64encode(dumps(self.tasks)).decode("utf-8"), send_update=False)
 
-        except Exception:
-            _log.error('Failed to save Reservation Manager state!')
+        except Exception as e:
+            _log.error(f'Failed to save Reservation Manager state! Error: {e}')
 
-    def new_task(self, sender, task_id, requests, priority, now=None):
+    def new_task(self, sender, task_id, priority, requests, now=None):
+        priority = priority.upper() if priority is not None else None
         local_tz = get_localzone()
         if requests and isinstance(requests[0], str):
             requests = [requests]
@@ -455,9 +464,8 @@ class ReservationManager(object):
             if end.tzinfo is None:
                 end = local_tz.localize(end)
             requests.append([device, start, end])
-        _log.debug("Got new reservation request: {}, {}, {}, {}".format(sender, task_id, priority,
-                                                                        requests))
-
+        _log.debug(f"Got new reservation request: {sender}, {task_id}, {priority}, {requests}")
+        
         now = now if now is not None else get_aware_utc_now()
         self._cleanup(now)
 
@@ -492,6 +500,7 @@ class ReservationManager(object):
 
         conflicts = defaultdict(dict)
         preempted_tasks = set()
+
         for t_id, task in self.tasks.items():
             conflict_list = new_task.get_conflicts(task)
             sender = task.agent_id
@@ -503,6 +512,7 @@ class ReservationManager(object):
         if conflicts:
             return RequestResult(False, conflicts, 'CONFLICTS_WITH_EXISTING_RESERVATIONS')
         self.tasks[task_id] = new_task
+        _log.debug(f"Task added. Total tasks now: {len(self.tasks)}")
 
         # By this point we know that any remaining conflicts can be preempted and the request will succeed.
         for _, t_id in preempted_tasks:
@@ -510,7 +520,10 @@ class ReservationManager(object):
             task.preempt(self.grace_time, now)
         self.save_state(now)
 
-        result = RequestResult(True, preempted_tasks, '')
+        if preempted_tasks:
+            result = RequestResult(True, list(preempted_tasks), 'TASKS_WERE_PREEMPTED')
+        else:
+            return RequestResult(True, {}, '')
         if result.success:
             # TODO: This implies a single device, but the loop above implies potentially multiple.
             #  The update() method sends a publish on the announce/full/device/path topic, implying all devices.
@@ -527,6 +540,7 @@ class ReservationManager(object):
         if task.agent_id != sender:
             return RequestResult(False, {}, 'AGENT_ID_TASK_ID_MISMATCH')
         del self.tasks[task_id]
+        _log.debug(f"Task {task_id} successfully cancelled.")
         self.save_state(now)
         result = RequestResult(True, {}, '')
         if result.success:
@@ -576,7 +590,6 @@ class ReservationManager(object):
         3. Before handling a reservation submission request.
         4. After handling a reservation submission request.
         5. Before handling a state request."""
-
         # Reset the running tasks.
         self.running_tasks = set()
         self.preempted_tasks = set()
@@ -585,6 +598,7 @@ class ReservationManager(object):
             task = self.tasks[task_id]
             task.make_current(now)
             if task.state == Task.STATE_FINISHED:
+                _log.debug(f"Removing task '{task_id}' because it is finished.")
                 del self.tasks[task_id]
 
             elif task.state == Task.STATE_RUNNING:

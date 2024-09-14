@@ -128,7 +128,7 @@ class PlatformDriverAgent(Agent):
                                          if self.config.scalability_test else None)
             except ValueError as e:
                 _log.error(
-                    "ERROR PROCESSING STARTUP CRITICAL CONFIGURATION SETTINGS: {}".format(e))
+                    f"ERROR PROCESSING STARTUP CRITICAL CONFIGURATION SETTINGS: {e}")
                 _log.error("Platform driver SHUTTING DOWN")
                 sys.exit(1)
 
@@ -722,7 +722,7 @@ class PlatformDriverAgent(Agent):
         point_name = point_name if point_name else kwargs.get('point', None)
 
         point_name = self._equipment_id(path, point_name)
-        node = self.equipment_tree.get_node(self._equipment_id(path, point_name))
+        node = self.equipment_tree.get_node(point_name)
         if not node:
             raise ValueError(f'No equipment found for topic: {point_name}')
         self.equipment_tree.raise_on_locks(node, sender)
