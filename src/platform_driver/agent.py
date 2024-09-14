@@ -521,9 +521,18 @@ class PlatformDriverAgent(Agent):
         # TODO: What should this return? If error_dict, how to get this?
 
     @RPC.export
-    def add_interface(self, driver_name: str, local_path: str = None) -> dict|None:
-        # TODO: Implement add_interface()
-        pass
+    def add_interface(self, interface_name: str, local_path: str = None) -> dict|None:
+        ### ADAPTED FROM volttron.client.install_agents.install_agent_vctl
+        if os.path.isdir(interface_name):
+        #     # TODO: Install from directory (see install_agent_directory in volttron.client.install_agents.py)
+             pass
+        elif interface_name.endswith(".whl") and not os.path.isfile(interface_name):
+            raise InstallRuntimeError(f"Invalid wheel file {interface_name}")
+            # TODO: Seems like there should be another elif after this.
+        else:
+            interface_package = self._interface_package_from_short_name(interface_name)
+            subprocess.run([sys.executable, '-m', 'pip', 'install', interface_package])
+        # TODO: What should this be returning?  If error_dict, how to get this?s
 
     @RPC.export
     def list_interfaces(self) -> list[str]:
