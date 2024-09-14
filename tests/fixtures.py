@@ -4,9 +4,9 @@ import pathlib
 import pytest
 
 from volttron.driver.base.interfaces import BaseInterface
-from volttron.services.driver.data_structures import RemoteTree
-from volttron.services.driver.platform_driver_service import DriverAgent  # TODO: This should import real DriverAgent from base driver and/or a better mock?
-from volttron.services.driver.platform_driver_service import PlatformDriverService
+#from volttron.services.driver.data_structures import RemoteTree
+from volttron.driver.base.driver import DriverAgent  # TODO: This should import real DriverAgent from base driver and/or a better mock?
+from platform_driver.agent import PlatformDriverAgent
 from volttron.types.server_config import ServerConfig
 
 
@@ -40,9 +40,9 @@ def driver_service():
     server_config = ServerConfig()
     server_config.opts = opts
 
-    # Instantiate PlatformDriverService:
-    pds = PlatformDriverService(server_config)
-    assert isinstance(pds, PlatformDriverService)
+    # Instantiate PlatformDriverAgent:
+    pds = PlatformDriverAgent(server_config)
+    assert isinstance(pds, PlatformDriverAgent)
     pds.interface_classes = {'TestInterface': DummyInterface()}
     return pds
 

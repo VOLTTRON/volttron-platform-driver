@@ -3,12 +3,12 @@ import json
 import logging
 
 from datetime import datetime
-from enum import Enum
 from treelib.exceptions import DuplicatedNodeIdError
 from typing import Iterable, Optional, Union
 
 from volttron.client.known_identities import CONFIGURATION_STORE
 from volttron.driver.base.driver import DriverAgent
+from volttron.driver.base.config import DataSource, DeviceConfig, EquipmentConfig
 from volttron.lib.topic_tree import TopicNode, TopicTree
 from volttron.utils import get_aware_utc_now, setup_logging
 
@@ -22,67 +22,57 @@ _log = logging.getLogger(__name__)
 class EquipmentNode(TopicNode):
     def __init__(self, config=None, *args, **kwargs):
         super(EquipmentNode, self).__init__(*args, **kwargs)
-        config = config if config is not None else {}
-        self.data['active']: bool = config.get('active', config.get('Active', True))
-        self.data['config'] = config
-        self.data['interface'] = None
-        self.data['meta_data']: dict = config.get('meta_data', {})
+        self.data['config'] = config if config is not None else EquipmentConfig()
+        self.data['remote'] = None
         # TODO: should ephemeral values like overridden and reserved_by be properties stored in data?
         self.data['overridden']: bool = False
-        self.data['polling_interval']: float = config.get('polling_interval', 0)
-        self.data['reservation_required_for_write']: bool = config.get('reservation_required_for_write', False)
         self.data['reserved_by'] = None
         self.data['segment_type'] = 'TOPIC_SEGMENT'
 
     @property
     def active(self) -> bool:
         # TODO: Make this inherit from parents or use et.rsearch when accessing it.
-        return self.data['active']
+        return self.data['config'].active
 
     @active.setter
     def active(self, value: bool):
-        self.data['active'] = value
+        self.data['config'].active = value
 
     @property
-    def config(self) -> dict:
+    def config(self) -> EquipmentConfig:
         return self.data['config']
 
     @config.setter
     def config(self, value: dict):
         self.data['config'] = value
 
-    # TODO: Consider replacing uses of this with et.get_remote(nid).
-    def get_remote(self, tree):
-        if self.is_device:
-            return self.data['interface']
-        elif not self.is_root():
-            return tree.get_node(self.predecessor(tree.identifier)).get_remote(tree.identifier)
-        else:
-            return None
+    @property
+    def group(self) -> int:
+        return self.data['config'].group
 
     @property
     def meta_data(self) -> dict:
-        return self.data['meta_data']
-
+        return self.data['config'].meta_data
+    # TODO: How does this fit with the metadata in the interface used for registers (points)?
     @meta_data.setter
     def meta_data(self, value: dict):
-        self.data['meta_data'] = value
+        self.data['config'].meta_data = value
 
     @property
     def polling_interval(self) -> float:
         # TODO: Should this be a property that inherits from parents?
-        return self.data['polling_interval']
+        return self.data['config'].polling_interval
 
     @polling_interval.setter
     def polling_interval(self, value: float):
-        self.data['polling_interval'] = value
+        self.data['config'].polling_interval = value
 
     @property
-    def is_point(self):
+    def is_point(self) -> bool:
         return True if self.segment_type == 'POINT' else False
 
     @property
-    def is_device(self):
+    def is_device(self) -> bool:
         return True if self.segment_type == 'DEVICE' else False
 
     @property
@@ -92,17 +82,41 @@ class EquipmentNode(TopicNode):
     @overridden.setter
     def overridden(self, value: bool):
         self.data['overridden'] = value
+        
+    @property
+    def publish_single_depth(self) -> bool:
+        return self.data['config'].publish_single_depth
+
+    @property
+    def publish_single_breadth(self) -> bool:
+        return self.data['config'].publish_single_breadth
+
+    @property
+    def publish_multi_depth(self) -> bool:
+        return self.data['config'].publish_multi_depth
+
+    @property
+    def publish_multi_breadth(self) -> bool:
+        return self.data['config'].publish_multi_breadth
+    
+    @property
+    def publish_all_depth(self) -> bool:
+        return self.data['config'].publish_all_depth
+
+    @property
+    def publish_all_breadth(self) -> bool:
+        return self.data['config'].publish_all_breadth
 
     @property
     def reservation_required_for_write(self) -> bool:
-        return self.data['reservation_required_for_write']
+        return self.data['config'].reservation_required_for_write
 
     @reservation_required_for_write.setter
     def reservation_required_for_write(self, value: bool):
-        self.data['reservation_required_for_write'] = value
+        self.data['config'].reservation_required_for_write = value
 
     @property
-    def reserved(self):
+    def reserved(self) -> str:
         return self.data['reserved_by']
 
     @reserved.setter
@@ -113,73 +127,48 @@ class DeviceNode(EquipmentNode):
     def __init__(self, config, driver, *args, **kwargs):
         config = config.copy()
         super(DeviceNode, self).__init__(config, *args, **kwargs)
-        self.data['interface']: DriverAgent = driver  # TODO: Should this just be the interface?
-        self.data['registry']: dict = config.pop('registry_config', [])
+        self.data['remote']: DriverAgent = driver
         self.data['registry_name'] = None
         self.data['segment_type'] = 'DEVICE'
 
     @property
-    def interface(self) -> DriverAgent:
-        return self.data['interface']
+    def all_publish_interval(self) -> float:
+        return self.data['config'].all_publish_interval
 
     @property
-    def registry(self) -> dict:
-        return self.data['registry']
+    def remote(self) -> DriverAgent:
+        return self.data['remote']
 
-    def set_registry_name(self):
-        # TODO: This method should be unnecessary, if we can just get the registry_name in the config_store push.
-        #  The registry name itself was not available at configuration time
-        #   and is not returned by the self.config.get() method ( it is dereferenced, already).
-        try:
-            remote_conf_json = self.interface.parent.vip.rpc.call(CONFIGURATION_STORE, 'manage_get',
-                                                             self.interface.parent.core.identity, self.identifier
-                                                             ).get(timeout=5)
-            remote_conf = json.loads(remote_conf_json)
-            self.data['registry_name'] = remote_conf.get('registry_config')
-        except (Exception, gevent.Timeout) as e:
-            _log.warning(f'Unable to set registry_name for device: {self.identifier} -- {e}')
-
-    def update_registry_row(self, row: dict):
-        self.data['registry'] = [row if r['Volttron Point Name'] == row['Volttron Point Name'] else r
-                                 for r in self.data['registry']]
-        if self.data['registry_name']:
-            self.interface.parent.vip.config.set(self.data['registry_name'], self.registry)
+    @property
+    def registry_name(self) -> str:
+        return self.data['registry_name']
 
     def stop_device(self):
         _log.info(f"Stopping driver: {self.identifier}")
         try:
-            self.interface.core.stop(timeout=5.0)
+            self.remote.core.stop(timeout=5.0)
         except Exception as e:
             _log.error(f"Failure during {self.identifier} driver shutdown: {e}")
-
-
-# TODO: Add data source types.
-DataSource = Enum('data_source', ['SHORT_POLL'])
 
 
 class PointNode(EquipmentNode):
     def __init__(self, config, *args, **kwargs):
         super(PointNode, self).__init__(config, *args, **kwargs)
-        self.data['data_source']: DataSource = DataSource[
-            "short_poll".upper()]  # TODO: Not a generally useful setting like this.
         self.data['last_value']: any = None
         self.data['last_updated']: Optional[datetime] = None
         self.data['segment_type'] = 'POINT'
+        # self._stale = True
 
     @property
     def data_source(self) -> DataSource:
-        return self.data['data_source']
+        return self.data['config'].data_source
 
     @data_source.setter
     def data_source(self, value: Union[str, int, DataSource]):
-        if isinstance(value, DataSource):
-            self.data['data_source'] = value
-        elif isinstance(value, str):
-            self.data['data_source'] = DataSource['value']
-        elif isinstance(value, int):
-            self.data['data_source'] = DataSource(value)
+        if isinstance(value, DataSource | str):
+            self.data['config'].data_source = value
         else:
-            raise ValueError('Data source must be a DataSource, integer or string.')
+            raise ValueError(f'Data source must be a DataSource or a string in: {list(DataSource.__members__.keys())}.')
 
     @property
     def last_value(self) -> any:
@@ -194,12 +183,47 @@ class PointNode(EquipmentNode):
     def last_updated(self) -> datetime:
         return self.data['last_updated']
 
+    @property
+    def stale(self) -> bool:
+        if self.active is False:
+            return False
+        elif self.data['config'].stale_timeout is None:
+            return False
+        else:
+            return True if get_aware_utc_now() - self.last_updated > self.data['config'].stale_timeout else False
+
 
 class EquipmentTree(TopicTree):
-    def __init__(self, root_name='devices', *args, **kwargs):
-        super(EquipmentTree, self).__init__(root_name=root_name, node_class=EquipmentNode, *args, **kwargs)
+    def __init__(self, agent, *args, **kwargs):
+        super(EquipmentTree, self).__init__(root_name=agent.config.depth_first_base, node_class=EquipmentNode,
+                                            *args, **kwargs)
+        self.agent = agent
+        root_config = self[self.root].data['config']
+        root_config.group = 0
+        root_config.polling_interval = agent.config.default_polling_interval
+        root_config.publish_single_depth = agent.config.publish_single_depth
+        root_config.publish_single_breadth = agent.config.publish_single_breadth
+        root_config.publish_multi_depth = agent.config.publish_multi_depth
+        root_config.publish_multi_breadth = agent.config.publish_multi_breadth
+        root_config.publish_all_depth = agent.config.publish_all_depth
+        root_config.publish_all_breadth = agent.config.publish_all_breadth
 
-    def add_device(self, device_topic, config, driver_agent):
+    def _set_registry_name(self, nid):
+        # TODO: This method should be unnecessary, if we can just get the registry_name in the config_store push.
+        #  The registry name itself was not available at configuration time
+        #   and is not returned by the self.config.get() method ( it is dereferenced, already).
+        remote_conf = {}
+        try:
+            remote_conf_json = self.agent.vip.rpc.call(CONFIGURATION_STORE, 'manage_get',self.agent.core.identity,
+                                                        nid).get(timeout=5)
+            remote_conf = json.loads(remote_conf_json)
+        except (Exception, gevent.Timeout) as e:
+            _log.warning(f'Unable to get registry_name for device: {nid} -- {e}')
+        finally:
+            return remote_conf.get('registry_config')
+
+    def add_device(self, device_topic: str, config: DeviceConfig, driver_agent: DriverAgent,
+                   registry_config: list[dict]):
         """
         Add Device
         Adds a device node to the equipment tree. Also adds any necessary ancestor topic nodes and child point nodes.
@@ -211,11 +235,9 @@ class EquipmentTree(TopicTree):
         parent = self.add_segment('/'.join(ancestral_topic))
 
         # Set up the device node itself.
-        registry_config = config.get('registry_config', [])
-        equipment_specific_fields = config.get('equipment_specific_fields', {})
         try:
             device_node = DeviceNode(config=config, driver=driver_agent, tag=device_name, identifier=device_topic)
-            device_node.set_registry_name()
+            device_node.data['registry_name'] = self._set_registry_name(device_node.identifier)
             self.add_node(device_node, parent=parent)
         except DuplicatedNodeIdError:
             # TODO: If the node already exists, update it as necessary?
@@ -224,23 +246,20 @@ class EquipmentTree(TopicTree):
         # Set up any point nodes which are children of this device.
         for reg in registry_config:
             # If there are fields in device config for all registries, add them where they are not overridden:
-            for k, v in equipment_specific_fields.items():
+            for k, v in config.equipment_specific_fields.items():
                 if not reg.get(k):
                     reg[k] = v
+            point_config = self.agent.interface_classes[driver_agent.config.driver_type].config_class(**reg)
             try:
-                point_name = reg['Volttron Point Name']
-                nid = '/'.join([device_topic, point_name])
-                node = PointNode(config=reg, tag=point_name, identifier=nid)
+                node = PointNode(config=point_config, tag=point_config.volttron_point_name,
+                                 identifier=('/'.join([device_topic, point_config.volttron_point_name])))
                 self.add_node(node, parent=device_topic)
             except DuplicatedNodeIdError:
-                pass  # TODO: Should we warn if we somehow have an existing point on a new device?
+                _log.warning(f'Duplicate Volttron Point Name "{point_config.volttron_point_name}" on {device_topic}.'
+                             f'Duplicate register will not be created. Please ensure ')
         return device_node
 
-    def stop_device(self):
-        # TODO: Intended for
-        pass
-
-    def add_segment(self, topic, config=None):
+    def add_segment(self, topic: str, config: EquipmentConfig = None):
         topic = topic.split('/')
         if topic[0] == self.root:
             topic.pop(0)
@@ -260,7 +279,7 @@ class EquipmentTree(TopicTree):
             node.config = config
         return nid
 
-    def remove_segment(self, identifier):
+    def remove_segment(self, identifier: str):
         node = self.get_node(identifier)
         if node.is_device:
             node.stop_device()
@@ -269,21 +288,22 @@ class EquipmentTree(TopicTree):
         else:
             self.remove_node(node.identifier) # Removes node and the subtree below.
 
-    def points(self, nid=None):
+    def points(self, nid: str = None) -> Iterable[PointNode]:
         if nid is None:
             points = [n for n in self._nodes.values() if n.is_point]
         else:
             points = [self[n] for n in self.expand_tree(nid) if self[n].is_point]
         return points
 
-    def devices(self, nid=None):
+    def devices(self, nid: str = None) -> Iterable[DeviceNode]:
         if nid is None:
             devices = [n for n in self._nodes.values() if n.is_device]
         else:
             devices = [self[n] for n in self.expand_tree(nid) if self[n].is_device]
         return devices
 
-    def find_points(self, topic_pattern: str = '', regex: str = None, exact_matches: Iterable = None) -> Iterable:
+    def find_points(self, topic_pattern: str = '', regex: str = None, exact_matches: Iterable = None
+                    ) -> Iterable[PointNode]:
         return (p for p in self.find_leaves(topic_pattern, regex, exact_matches) if p.is_point)
 
     def raise_on_locks(self, node: EquipmentNode, requester: str):
@@ -301,67 +321,43 @@ class EquipmentTree(TopicTree):
         return self.get_node(next(self.rsearch(nid, lambda n: n.is_device)))
 
     def get_remote(self, nid: str) -> DriverAgent:
-        return self.get_device_node(nid).interface
+        return self.get_device_node(nid).remote
 
+    def get_group(self, nid: str) -> int:
+        return self[next(self.rsearch(nid, lambda n: n.group is not None))].group
 
-# TODO: Probably remove this block entirely.
-# RemoteGroupingType = Enum('node_type', ['Parallel', 'Sequential', 'Serial'])
-#
-# class DuplicateRemoteError(Exception):
-#     """Exception thrown if Remote is already attached to another group."""
-#     pass
-#
-#
-# class RemoteNode(Node):
-#     def __init__(self,
-#                  group_id: str = None,
-#                  grouping_type: str = 'Sequential',
-#                  minimum_offset: float = 0.0,
-#                  *args, **kwargs):
-#         identifier = kwargs.pop('identifier', group_id)
-#         super(RemoteNode, self).__init__(tag=group_id, identifier=identifier, *args, **kwargs)
-#         self.type = RemoteGroupingType[grouping_type.title()]
-#         self.minimum_offset = minimum_offset
-#         self.remotes = WeakSet()
-#
-#
-# class RemoteTree(Tree):
-#     def __init__(self,
-#                  config: dict = None,
-#                  legacy_group_offset_interval: float = 0.0,
-#                  minimum_polling_interval: float = 0.02,
-#                  *args, **kwargs):
-#         super(RemoteTree, self).__init__(node_class=RemoteNode, *args, **kwargs)
-#         config = config if config else {
-#             'minimum_offset': legacy_group_offset_interval,
-#             'children': [{'group_id': '0', 'minimum_offset': minimum_polling_interval}]
-#         }
-#         children = config.pop('children', [])
-#         identifier = config.pop('identifier', config.pop('group_id', 'remotes'))
-#         self.add_node(RemoteNode(identifier=identifier, **config))
-#         if children:
-#             self._add_children(children, self.get_node(self.root))
-#
-#     def _add_children(self, config: list, parent: RemoteNode):
-#         for child in config:
-#             child_group_id = child.get('group_id')
-#             nid = '/'.join([parent.identifier, child_group_id]) if child_group_id else None
-#             grandchildren = child.pop('children', [])
-#             self.add_node(RemoteNode(identifier=nid, **child), parent)
-#             if grandchildren:
-#                 self._add_children(grandchildren, self.get_node(nid))
-#
-#     def add_remote(self, remote: DriverAgent, remote_group_id: str,
-#                        allow_duplicate_remotes: bool = False):
-#         if not allow_duplicate_remotes:
-#             for n in self.all_nodes():
-#                 if remote in n.remotes and n.group_id != remote_group_id:
-#                     err = f'Remote already exists in group: {n.identifier} but duplication is not allowed.'
-#                     raise DuplicatedNodeIdError(err)
-#         self.get_node(remote_group_id).remotes.add(remote)
-#
-#     def remove_remote(self, remote: DriverAgent, nid: str):
-#         self.get_node(nid).remotes.remove(remote)
-#
-#     def schedule_polling(self):
-#         pass
+    def get_point_topics(self, nid: str) -> tuple[str, str]:
+        return nid, '/'.join([self.agent.config.breadth_first_base] + list(reversed(nid.split('/')[1:])))
+
+    def get_device_topics(self, nid: str) -> tuple[str, str]:
+        return self.get_point_topics(self.get_device_node(nid).identifier)
+
+    def get_polling_interval(self, nid: str) -> float:
+        return self[next(self.rsearch(nid, lambda n: n.polling_interval is not None))].polling_interval
+
+    def is_published_single_depth(self, nid: str) -> bool:
+        return self[next(self.rsearch(nid, lambda n: n.publish_single_depth is not None))].publish_single_depth
+    
+    def is_published_single_breadth(self, nid: str) -> bool:
+        return self[next(self.rsearch(nid, lambda n: n.publish_single_breadth is not None))].publish_single_breadth
+
+    def is_published_multi_depth(self, nid: str) -> bool:
+        return self[next(self.rsearch(nid, lambda n: n.publish_multi_depth is not None))].publish_multi_depth
+
+    def is_published_multi_breadth(self, nid: str) -> bool:
+        return self[next(self.rsearch(nid, lambda n: n.publish_multi_breadth is not None))].publish_multi_breadth
+
+    def is_published_all_depth(self, nid: str) -> bool:
+        return self[next(self.rsearch(nid, lambda n: n.publish_all_depth is not None))].publish_all_depth
+
+    def is_published_all_breadth(self, nid: str) -> bool:
+        return self[next(self.rsearch(nid, lambda n: n.publish_all_breadth is not None))].publish_all_breadth
+
+    def is_stale(self, nid: str) -> bool:
+        return any(p.stale for p in self.points(nid))
+
+    def update_stored_registry_config(self, nid: str):
+        device_node = self.equipment_tree.get_device_node(nid)
+        registry = [p.config for p in self.points(device_node.nid)]
+        if device_node.registry_name:
+            self.agent.vip.config.set(device_node.registry_name, registry)

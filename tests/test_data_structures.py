@@ -51,20 +51,20 @@ def test_build_equipment_tree(driver_agent):
     foo = et.get_node('devices/Foo')
     bar = et.get_node('devices/Foo/Bar')
     baz = et.get_node('devices/Foo/Bar/Baz')
-    assert not foo.is_point() and not foo.is_device()
+    assert not foo.is_point and not foo.is_device
     assert isinstance(foo, EquipmentNode) and not isinstance(foo, DeviceNode)
-    assert not bar.is_point() and not bar.is_device()
+    assert not bar.is_point and not bar.is_device
     assert isinstance(bar, EquipmentNode) and not isinstance(bar, DeviceNode)
-    assert not baz.is_point() and baz.is_device()
+    assert not baz.is_point and baz.is_device
     assert isinstance(baz, EquipmentNode) and isinstance(baz, DeviceNode)
     et.add_device('devices/Foo/Car/Baz', {'registry_config': SAMPLE_REGISTRY}, driver_agent)
     print(et.show())
     car = et.get_node('devices/Foo/Car')
     carbaz = et.get_node('devices/Foo/Car/Baz')
     assert len(et.all_nodes()) == 28
-    assert not car.is_point() and not car.is_device()
+    assert not car.is_point and not car.is_device
     assert isinstance(car, EquipmentNode) and not isinstance(car, DeviceNode)
-    assert not carbaz.is_point() and carbaz.is_device()
+    assert not carbaz.is_point and carbaz.is_device
     assert isinstance(carbaz, EquipmentNode) and isinstance(carbaz, DeviceNode)
-    assert all([et.get_node(n).is_point() and not et.get_node(n).is_device() for n in carbaz.successors(et.identifier)])
+    assert all([et.get_node(n).is_point and not et.get_node(n).is_device for n in carbaz.successors(et.identifier)])
     assert all([isinstance(et.get_node(n), PointNode) for n in carbaz.successors(et.identifier)])

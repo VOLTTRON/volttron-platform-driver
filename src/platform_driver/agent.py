@@ -25,28 +25,31 @@
 import gevent
 import importlib
 import logging
+import os
+import subprocess
 import sys
 
 from collections import defaultdict
 from datetime import datetime
 from pkgutil import iter_modules
-from pydantic import BaseModel, ValidationError
-from typing import Sequence, Set
+from pydantic import ValidationError
+from typing import Iterable, Sequence, Set
 from weakref import WeakValueDictionary
 
+from volttron.client.commands.install_agents import InstallRuntimeError
 from volttron.client.known_identities import PLATFORM_DRIVER
 from volttron.client.messaging.health import STATUS_BAD
 from volttron.client.messaging.utils import normtopic
 from volttron.client.vip.agent import Agent, Core
 from volttron.client.vip.agent.subsystems.rpc import RPC
-from volttron.driver.base.driver import BaseInterface, DriverAgent
+from volttron.driver.base.driver import BaseInterface, DriverAgent, RemoteConfig
 from volttron.driver.base.driver_locks import configure_publish_lock, setup_socket_lock
-from volttron.driver.base.utils import setup_publishes
+from volttron.driver.base.config import DeviceConfig, EquipmentConfig
 from volttron.driver import interfaces
 from volttron.utils import format_timestamp, get_aware_utc_now, load_config, setup_logging, vip_main
 from volttron.utils.jsonrpc import RemoteError
 
-
+from .config import latest_config_version, PlatformDriverConfig, PlatformDriverConfigV1, PlatformDriverConfigV2
 from .constants import *
 from .equipment import EquipmentTree, PointNode
 from .overrides import OverrideManager
@@ -57,54 +60,6 @@ setup_logging()
 _log = logging.getLogger(__name__)
 __version__ = '4.0'
 
-latest_config_version = 2
-
-class PlatformDriverConfig(BaseModel):
-    config_version: int = latest_config_version
-    allow_duplicate_remotes: bool = False
-    allow_no_lock_write: bool = False  # TODO: Alias with "require_reservation_to_write"?
-    allow_reschedule: bool = True
-    remote_heartbeat_interval: float = 60.0
-    # default_polling_interval: float = 60 # TODO: Is this used?
-    group_offset_interval: float = 0.0
-    max_concurrent_publishes: int = 10000
-    max_open_sockets: int | None = None
-    minimum_polling_interval: float = 0.02
-    poll_scheduler_configs: dict = {}
-    poll_scheduler_class_name: str = 'StaticCyclicPollScheduler'
-    poll_scheduler_module_name: str = 'platform_driver.poll_scheduler'
-    reservation_preempt_grace_time: float = 60.0
-    reservation_publish_interval: float = 60.0
-    reservation_required_for_write: bool = False
-    scalability_test: bool = False
-    scalability_test_iterations: int = 3
-
-class PlatformDriverConfigV2(PlatformDriverConfig):
-    config_version: int = 2
-    publish_depth_first_single: bool = False
-    publish_depth_first_all: bool = False
-    publish_depth_first_any: bool = True
-    publish_breadth_first_single: bool = False
-    publish_breadth_first_all: bool = False
-    publish_breadth_first_any: bool = False
-
-
-class PlatformDriverConfigV1(PlatformDriverConfig):
-    config_version: int = 1
-    driver_scrape_interval: float = 0.02
-    publish_depth_first: bool = False
-    publish_depth_first_all: bool = True
-    publish_breadth_first: bool = False
-    publish_breadth_first_all: bool = False
-
-
-class RemoteConfig(BaseModel):
-    pass
-
-
-class EquipmentConfig(BaseModel):
-    pass
-
 
 class PlatformDriverAgent(Agent):
 
@@ -112,15 +67,10 @@ class PlatformDriverAgent(Agent):
         config_path = kwargs.pop('config_path', None)
         super(PlatformDriverAgent, self).__init__(**kwargs)
         self.config: PlatformDriverConfig = self._load_versioned_config(load_config(config_path) if config_path else {})
-        if self.config.config_version == 1:
-            self.config = self._convert_version_1_configs(self.config)
-
-        self.breadth_first_publishes, self.depth_first_publishes = setup_publishes(self.config)
-        self.remote_heartbeat_interval = self.config.remote_heartbeat_interval
 
         # Initialize internal data structures:
         self.remotes = WeakValueDictionary()
-        self.equipment_tree = EquipmentTree()
+        self.equipment_tree = EquipmentTree(self)
         self.interface_classes = {}
 
         # Set up locations for helper objects:
@@ -142,11 +92,6 @@ class PlatformDriverAgent(Agent):
     #########################
     # Configuration & Startup
     #########################
-
-    @staticmethod
-    def _convert_version_1_configs(config: PlatformDriverConfig):
-        config.minimum_polling_interval = config.driver_scrape_interval
-        return config
 
     def _load_versioned_config(self, config: dict):
         if not config: # There is no configuration yet, just loading defaults. No need to warn about versions.
@@ -173,8 +118,6 @@ class PlatformDriverAgent(Agent):
         _log.debug("############# STARTING CONFIGURE_MAIN")
         old_config = self.config.copy()
         new_config = self._load_versioned_config(contents)
-        if new_config.config_version == 1:
-            new_config = self._convert_version_1_configs(new_config)
         _log.debug(self.config)
         if action == "NEW":
             self.config = new_config
@@ -221,11 +164,6 @@ class PlatformDriverAgent(Agent):
         if self.override_manager is None:
             self.override_manager = OverrideManager(self)
 
-        self.breadth_first_publishes, self.depth_first_publishes = setup_publishes(self.config)
-        # Update the publication settings on running devices.
-        for driver in self.remotes.values():
-            driver.update_publish_types(self.breadth_first_publishes, self.depth_first_publishes)
-
         # Set up Poll Scheduler:
         poll_scheduler_module = importlib.import_module(self.config.poll_scheduler_module_name)
         poll_scheduler_class = getattr(poll_scheduler_module, self.config.poll_scheduler_class_name)
@@ -242,7 +180,7 @@ class PlatformDriverAgent(Agent):
         # Set up heartbeat to devices:
         # TODO: Should this be globally uniform (here), by device (in remote), or globally scheduled (in poll scheduler)?
         # Only restart the heartbeat if it changes.
-        if (self.config.remote_heartbeat_interval != self.remote_heartbeat_interval
+        if (self.config.remote_heartbeat_interval != old_config.remote_heartbeat_interval
                 or action == "NEW" or self.heartbeat_greenlet is None):
             if self.heartbeat_greenlet is not None:
                 self.heartbeat_greenlet.kill()
@@ -281,75 +219,62 @@ class PlatformDriverAgent(Agent):
         _log.error(f"########## RUNNING ON_START (REMOVING LOCK).")
         self.equipment_config_lock = False
 
-    def _configure_new_equipment(self, config_name: str, _, contents: dict, schedule_now: bool = True):
-        # TODO: Should contents be a config object for the remote or equipment config already? Where does that validate?
-        if self.equipment_tree.get_node(config_name):
-            # TODO: Specify what action was taken here.
-            _log.warning(f'Received a NEW configuration for equipment which already exists: {config_name}')
+    def _configure_new_equipment(self, equipment_name: str, _, contents: dict, schedule_now: bool = True):
+        # Separate remote_config and make adjustments for possible config version 1:
+        remote_config = contents.pop('remote_config', contents.pop('driver_config', {}))
+        remote_config['driver_type'] = remote_config.get('driver_type', contents.pop('driver_type', None))
+        # TODO: Where to put heart_beat_point? Is that remote or equipment specific?
+        remote_config = RemoteConfig(**remote_config)
+
+        if self.equipment_tree.get_node(equipment_name):
+            _log.warning(f'Received a NEW configuration for equipment which already exists: {equipment_name}.'
+                         f'New configuration has been ignored.')
             return
-        if contents.get('remote_config', contents).get('driver_type'):
+        if remote_config.driver_type:
             # Received new device node.
+            registry_config = contents.pop('registry_config', [])
+            dev_config = DeviceConfig(**contents)
             try:
-                driver = self._get_or_create_remote(config_name, contents)
+                driver = self._get_or_create_remote(equipment_name, remote_config, dev_config.allow_duplicate_remotes)
             except ValueError as e:
-                _log.warning(f'Skipping configuration of equipment: {config_name} after encountering error --- {e}')
+                _log.warning(f'Skipping configuration of equipment: {equipment_name} after encountering error --- {e}')
                 return
-            device_node = self.equipment_tree.add_device(device_topic=config_name, config=contents, driver_agent=driver)
+            device_node = self.equipment_tree.add_device(device_topic=equipment_name, config=dev_config,
+                                                         driver_agent=driver, registry_config=registry_config)
             driver.add_equipment(device_node)
         else: # Received new or updated segment node.
-            self.equipment_tree.add_segment(config_name, contents)
+            equipment_config = EquipmentConfig(**contents)
+            self.equipment_tree.add_segment(equipment_name, equipment_config)
         if schedule_now:
             self.poll_scheduler.schedule()
 
-    def _get_or_create_remote(self, equipment_name: str, config: RemoteConfig):
-        # TODO: This has gotten reworked a few times, and may not entirely make sense anymore
-        #  for where everything ends up and what we are manipulating to manage versions.
-        if self.config.config_version >= 2:
-            # TODO: Make this use the pydantic models. Should the config variable be RemoteConfig or EquipmentConfig?
-            interface_name = config['remote_config'].get('driver_type')
-            remote_group = config['remote_config'].get('group', '0')
-            config['remote_config']['group'] = remote_group
-            remote_config = config['remote_config']
-        else:
-            interface_name = config.get('driver_type')
-            remote_group = config.get('group', '0')
-            remote_config = config['driver_config']
-            remote_config['group'] = remote_group
-            remote_config['driver_type'] = interface_name
-        if not interface_name:
-            raise ValueError(f'Unable to configure driver for equipment: "{equipment_name}"'
-                             f' as it does not have a specified interface.')
-        else:
-            interface = self.interface_classes.get(interface_name)
-            if not interface:
-                try:
-                    module = remote_config.get('module')
-                    interface = BaseInterface.get_interface_subclass(interface_name, module)
-                except (ModuleNotFoundError, ValueError) as e:
-                    raise ValueError(f'Unable to configure driver for equipment: "{equipment_name}"'
-                                     f' with interface: {interface_name}.'
-                                     f' This interface type is currently unknown or not installed.'
-                                     f' Received exception: {e}')
-                self.interface_classes[interface_name] = interface
+    def _get_or_create_remote(self, equipment_name: str, remote_config: RemoteConfig, allow_duplicate_remotes):
+        interface = self.interface_classes.get(remote_config.driver_type)
+        if not interface:
+            try:
+                module = remote_config.module
+                interface = BaseInterface.get_interface_subclass(remote_config.driver_type, module)
+            except (AttributeError, ModuleNotFoundError, ValueError) as e:
+                raise ValueError(f'Unable to configure driver for equipment: "{equipment_name}"'
+                                 f' with interface: {remote_config.driver_type}.'
+                                 f' This interface type is currently unknown or not installed.'
+                                 f' Received exception: {e}')
+            self.interface_classes[remote_config.driver_type] = interface
 
-            allow_duplicate_remotes = True if (remote_config.get('allow_duplicate_remotes')
-                                                   or self.config.allow_duplicate_remotes) else False
-            if not allow_duplicate_remotes:
-                unique_remote_id = interface.unique_remote_id(equipment_name, remote_config)
-            else:
-                unique_remote_id = BaseInterface.unique_remote_id(equipment_name, remote_config)
+        allow_duplicate_remotes = True if (allow_duplicate_remotes or self.config.allow_duplicate_remotes) else False
+        if not allow_duplicate_remotes:
+            unique_remote_id = interface.unique_remote_id(equipment_name, remote_config)
+        else:
+            unique_remote_id = BaseInterface.unique_remote_id(equipment_name, remote_config)
 
-            driver_agent = self.remotes.get(unique_remote_id)
-            if not driver_agent:
-                _log.info("Starting driver: {}".format(unique_remote_id))
-                _log.debug('GIVING NEW DRIVER CONFIG: ')
-                _log.debug(config)
-                driver_agent = DriverAgent(self, config, unique_remote_id)
-                _log.debug(f"SPAWNING GREENLET for: {unique_remote_id}")
-                gevent.spawn(driver_agent.core.run)
-                # TODO: Were the right number spawned? Need more debug code to ascertain this is working correctly.
-                self.remotes[unique_remote_id] = driver_agent
-            return driver_agent
+        driver_agent = self.remotes.get(unique_remote_id)
+        if not driver_agent:
+            driver_agent = DriverAgent(remote_config, self.equipment_tree, self. scalability_test, self.config.timezone,
+                                       unique_remote_id, self.vip)
+            gevent.spawn(driver_agent.core.run)
+            # TODO: Were the right number spawned? Need more debug code to ascertain this is working correctly.
+            self.remotes[unique_remote_id] = driver_agent
+        return driver_agent
 
     def update_equipment(self, config_name: str, action: str, contents: dict):
         """Callback for updating equipment configuration."""
@@ -433,7 +358,6 @@ class PlatformDriverAgent(Agent):
             if confirm_values:
                 # TODO: Should results contain the values read back from the device, or Booleans for success?
                 results.update(remote.get_multiple_points([p.identifier for p in point_set]))
-        return results, errors
 
     @RPC.export
     def revert(self, topic: str | Sequence[str] | Set[str] = None, tag: str = None, regex: str = None,
@@ -491,26 +415,27 @@ class PlatformDriverAgent(Agent):
     def enable(self, topic: str | Sequence[str] | Set[str] = None, tag: str = None, regex: str = None) -> None:
         nodes = self.equipment_tree.find_points(topic, regex, tag)
         for node in nodes:
-            node.config['active'] = True
+            node.config.active = True
             if not node.is_point:
                 # TODO: Make sure this doesn't trigger UPDATE.
                 self.vip.config.set(node.topic, node.config, trigger_callback=False)
             else:
-                device_node = self.equipment_tree.get_device_node(node.identifier)
-                node.config.update({'Active': True})
-                device_node.update_registry_row(node.config)
+                self.equipment_tree.update_stored_registry_config(node.identifier)
 
     @RPC.export
     def disable(self, topic: str | Sequence[str] | Set[str] = None, tag: str = None, regex: str = None) -> None:
         nodes = self.equipment_tree.find_points(topic, regex, tag)
         for node in nodes:
-            node.config['active'] = False
+            node.config.active = False
             if not node.is_point:
                 self.vip.config.set(node.topic, node.config, trigger_callback=False)
             else:
-                device_node = self.equipment_tree.get_device_node(node.identifier)
-                node.config['active'] = False
-                device_node.update_registry_row(node.config)
+                self.equipment_tree.update_stored_registry_config(node.identifier)
+
+    @RPC.export
+    def status(self, topic: str | Sequence[str] | Set[str] = None, regex: str = None) -> dict:
+        nodes = self.equipment_tree.find_points(topic, regex)
+        return self._status(nodes)
 
     @RPC.export
     def status(self, topic: str | Sequence[str] | Set[str] = None, tag: str = None, regex: str = None) -> dict:
@@ -570,6 +495,7 @@ class PlatformDriverAgent(Agent):
         described in `Device Schedule`_.
         """
         rpc_peer = self.vip.rpc.context.vip_message.peer
+        # TODO: Is new_reservation the same as new_task?
         return self.reservation_manager.new_reservation(rpc_peer, task_id, priority, requests, publish_result=False)
 
     @RPC.export
@@ -579,6 +505,7 @@ class PlatformDriverAgent(Agent):
         :param task_id: Task name.
         """
         rpc_peer = self.vip.rpc.context.vip_message.peer
+        # TODO: Is cancel_reservation the same as new_task?
         return self.reservation_manager.cancel_reservation(rpc_peer, task_id, publish_result=False)
 
     #----------
@@ -675,7 +602,7 @@ class PlatformDriverAgent(Agent):
         node = self.equipment_tree.get_node(point_name)
         if not node:
             raise ValueError(f'No equipment found for topic: {point_name}')
-        remote = node.get_remote(self.equipment_tree)
+        remote = self.equipment_tree.get_remote(node.identifier)
         if not remote:
             raise ValueError(f'No remote found for topic: {point_name}')
         return remote.get_point(point_name, **kwargs)
@@ -723,7 +650,7 @@ class PlatformDriverAgent(Agent):
         if not node:
             raise ValueError(f'No equipment found for topic: {point_name}')
         self.equipment_tree.raise_on_locks(node, sender)
-        remote = node.get_remote(self.equipment_tree.identifier)
+        remote = self.equipment_tree.get_remote(node.identifier)
         if not remote:
             raise ValueError(f'No remote found for topic: {point_name}')
         result = remote.set_point(point_name, value, **kwargs)
@@ -834,8 +761,8 @@ class PlatformDriverAgent(Agent):
         # TODO: Make sure this is being called with the full topic.
         # TODO: Should this still be exposed if the actuator agent no longer needs to send to this?
         _log.debug("sending heartbeat")
-        for device in self.remotes.values():
-            device.heart_beat()
+        for remote in self.remotes.values():
+            remote.heart_beat()
 
     @RPC.export
     def revert_point(self, path: str, point_name: str, **kwargs):
@@ -871,7 +798,7 @@ class PlatformDriverAgent(Agent):
         if not node:
             raise ValueError(f'No equipment found for topic: {point_name}')
         self.equipment_tree.raise_on_locks(node, sender)
-        remote = node.get_remote(self.equipment_tree.identifier)
+        remote = self.equipment_tree.get_remote(node.identifier)
         remote.revert_point(point_name, **kwargs)
 
         headers = self._get_headers(sender)
@@ -904,7 +831,7 @@ class PlatformDriverAgent(Agent):
         if not node:
             raise ValueError(f'No equipment found for topic: {path}')
         self.equipment_tree.raise_on_locks(node, sender)
-        remote = node.get_remote(self.equipment_tree.identifier)
+        remote = self.equipment_tree.get_remote(node.identifier)
         remote.revert_all(**kwargs)
 
         headers = self._get_headers(sender)
@@ -1082,7 +1009,7 @@ class PlatformDriverAgent(Agent):
         try:
             node = self.equipment_tree.get_node(topic)
             self.equipment_tree.raise_on_locks(node, sender)
-            remote = node.get_remote(self.equipment_tree.identifier)
+            remote = self.equipment_tree.get_remote(node.identifier)
             remote.revert_point(topic)
 
             self._push_result_topic_pair(REVERT_POINT_RESPONSE_PREFIX, topic, headers, None)
@@ -1123,7 +1050,7 @@ class PlatformDriverAgent(Agent):
         try:
             node = self.equipment_tree.get_node(topic)
             self.equipment_tree.raise_on_locks(node, sender)
-            remote = node.get_remote(self.equipment_tree.identifier)
+            remote = self.equipment_tree.get_remote(node.identifier)
             remote.revert_all()
 
             self._push_result_topic_pair(REVERT_DEVICE_RESPONSE_PREFIX, topic, headers, None)

@@ -64,9 +64,9 @@ def test_configure_new_equipment(driver_service, driver_agent, driver_type, acti
     pds._configure_new_equipment(topic, action, contents)
     if action == 'NEW' and driver_type:
         assert pds.equipment_tree.contains(topic)
-        assert pds.equipment_tree.get_node(topic).is_device()
+        assert pds.equipment_tree.get_node(topic).is_device
     elif action == 'NEW' and not driver_type:
         assert pds.equipment_tree.contains(topic)
-        assert not pds.equipment_tree.get_node(topic).is_device()
+        assert not pds.equipment_tree.get_node(topic).is_device
 
 
