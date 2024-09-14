@@ -161,6 +161,7 @@ class PlatformDriverAgent(Agent):
                 return
             self.config = new_config
 
+        # TODO: Should this be in a try block? The old version was, but called loads().
         if self.override_manager is None:
             self.override_manager = OverrideManager(self)
 
@@ -297,61 +298,69 @@ class PlatformDriverAgent(Agent):
     # Query Backend
     ###############
 
-    def resolve_tags(self, tags):
+    def semantic_query(self, query):
         """ Resolve tags from tagging service. """
         try:
-            tag_list = self.vip.rpc.call('platform.tagging', 'get_topics_by_tags', tags).get(timeout=5)
-            return tag_list if tag_list else []
+            return self.vip.rpc.call('platform.semantic', 'semantic_query', query).get(timeout=5)
         except gevent.Timeout as e:
-            _log.warning(f'Tagging Service timed out: {e.exception}')
-            return []
+            _log.warning(f'Semantic Interoperability Service timed out: {e.exception}')
+            return {}
 
-    def build_query_plan(self, topic: str | Sequence[str] | Set[str] = None, regex: str = None, tag: str = None
-                         ) -> dict[DriverAgent, set[PointNode]]:
+    def build_query_plan(self, topic: str | Sequence[str] | Set[str] = None,
+                         regex: str = None) -> dict[DriverAgent, Set[PointNode]]:
         """ Find points to be queried and organize by remote."""
         exact_matches, topic = (topic, None) if isinstance(topic, list) else ([], topic)
-        if tag:
-            exact_matches.extend(self.resolve_tags(tag))
         query_plan = defaultdict(set)
-        for p in self.equipment_tree.find_points(topic, regex, tag):
+        for p in self.equipment_tree.find_points(topic, regex, exact_matches):
             query_plan[self.equipment_tree.get_remote(p.identifier)].add(p)
         return query_plan
 
     ###############
     # RPC Interface
     ###############
-    # TODO: semantic_get
 
     @RPC.export
-    def get(self, topic: str | Sequence[str] | Set[str] = None, tag: str = None, regex: str = None) -> (dict, dict):
-        _log.debug("############ IN GET")
-        results = {}
-        errors = {}
+    def get(self, topic: str | Sequence[str] | Set[str] = None, regex: str = None) -> (dict, dict):
         # Find set of points to query and organize by remote:
-        query_plan = self.build_query_plan(topic, regex, tag)
-        # Make query for selected points on each remote:
+        query_plan = self.build_query_plan(topic, regex)
+        return self._get(query_plan)
+
+    @RPC.export
+    def semantic_get(self, query: str) -> (dict, dict):
+        exact_matches = self.semantic_query(query)
+        query_plan = self.build_query_plan(exact_matches)
+        return self._get(query_plan)
+
+    def _get(self, query_plan: dict[DriverAgent, Set[PointNode]]):
+        """Make query for selected points on each remote"""
+        results, errors = {}, {}
         for (remote, point_set) in query_plan.items():
             q_return_values, q_return_errors = remote.get_multiple_points([p.identifier for p in point_set])
-            _log.debug(f'GOT BACK FROM GET_MULTIPLE_POINTS WITH: {q_return_values}')
-            _log.debug(f'ERRORS FROM GET_MULTIPLE_POINTS: {q_return_errors}')
             for topic, val in q_return_values.items():
                 node = self.equipment_tree.get_node(topic)
                 if node:
                     node.last_value(val)
             results.update(q_return_values)
             errors.update(q_return_errors)
-        return results, errors
+            return results, errors
 
     @RPC.export
-    def set(self, value: any, topic: str | Sequence[str] | Set[str] = None, tag: str = None, regex: str = None,
-            confirm_values: bool = False, map_points=False) -> (dict, dict):
-        results = {}
-        errors = {}
-        # Find set of points to query and organize by remote:
-        query_plan = self.build_query_plan(topic, regex, tag)
-        # Set selected points on each remote:
+    def set(self, value: any, topic: str | Sequence[str] | Set[str] = None, regex: str = None,
+            confirm_values: bool = False, map_points: bool = False) -> (dict, dict):
+        query_plan = self.build_query_plan(topic, regex)
+        return self._set(value, query_plan, confirm_values, map_points)
+
+    @RPC.export
+    def semantic_set(self, value: any, query: str, confirm_values: bool = False) -> (dict, dict):
+        exact_matches = self.semantic_query(query)
+        query_plan = self.build_query_plan(exact_matches)
+        return self._set(value, query_plan, confirm_values)
+
+    @staticmethod
+    def _set(value: any, query_plan: dict[DriverAgent, Set[PointNode]], confirm_values: bool, map_points=False):
+        """Set selected points on each remote"""
+        results, errors = {}, {}
         for (remote, point_set) in query_plan.items():
-            # TODO: The DriverAgent isn't currently expecting full topics.
             point_value_tuples = list(value.items()) if map_points else [(p.identifier, value) for p in point_set]
             query_return_errors = remote.set_multiple_points(point_value_tuples)
             errors.update(query_return_errors)
@@ -360,19 +369,37 @@ class PlatformDriverAgent(Agent):
                 results.update(remote.get_multiple_points([p.identifier for p in point_set]))
 
     @RPC.export
-    def revert(self, topic: str | Sequence[str] | Set[str] = None, tag: str = None, regex: str = None,
+    def revert(self, topic: str | Sequence[str] | Set[str] = None, regex: str = None,
               confirm_values: bool = False) -> dict:
-        query_plan = self.build_query_plan(topic, regex, tag)
-        # Set selected points on each remote:
-        for (remote, point_set) in query_plan.items():
-            # TODO: How to handle all/single/multiple reverts? Detect devices, and othewise use revert_point? Add revert_multiple?
-            pass
-        # TODO: What to return for this? The current methods return None.
+        query_plan = self.build_query_plan(topic, regex)
+        return self._revert(query_plan, confirm_values)
 
     @RPC.export
-    def last(self, topic: str | Sequence[str] | Set[str] = None, tag: str = None, regex: str = None,
+    def semantic_revert(self, query: str, confirm_values: bool = False) -> dict:
+        exact_matches = self.semantic_query(query)
+        query_plan = self.build_query_plan(exact_matches)
+        return self._revert(query_plan, confirm_values)
+
+    def _revert(self, query_plan, confirm_values: bool):
+        # Set selected points on each remote:
+        for (remote, point_set) in query_plan.items():
+            # TODO: How to handle all/single/multiple reverts? Detect devices, and otherwise use revert_point? Add revert_multiple?
+            pass
+        return {} # TODO: What to return for this? The current methods return None.
+
+    @RPC.export
+    def last(self, topic: str | Sequence[str] | Set[str] = None, regex: str = None,
              value: bool = True, updated: bool = True) -> dict:
-        points = self.equipment_tree.find_points(topic, regex, tag)
+        points = self.equipment_tree.find_points(topic, regex)
+        return self._last(points, value, updated)
+
+    @RPC.export
+    def semantic_last(self, query: str, value: bool = True, updated: bool = True) -> dict:
+        exact_matches = self.semantic_query(query)
+        return self._last(exact_matches, value, updated)
+
+    @staticmethod
+    def _last(points: Iterable[PointNode], value: bool, updated: bool):
         if value:
             if updated:
                 return_dict = {p.topic: {'value': p.last_value, 'updated': p.last_updated} for p in points}
@@ -386,8 +413,17 @@ class PlatformDriverAgent(Agent):
     # UI Support
     #-----------
     @RPC.export
-    def start(self, topic: str | Sequence[str] | Set[str] = None, tag: str = None, regex: str = None) -> None:
-        points = self.equipment_tree.find_points(topic, regex, tag)
+    def start(self, topic: str | Sequence[str] | Set[str] = None, regex: str = None) -> None:
+        points = self.equipment_tree.find_points(topic, regex)
+        self._start(points)
+
+    @RPC.export
+    def semantic_start(self, query: str) -> None:
+        exact_matches = self.semantic_query(query)
+        points = self.equipment_tree.find_points(exact_matches)
+        self._start(points)
+
+    def _start(self, points: Iterable[PointNode]) -> None:
         for p in points:
             if p.active:
                 return
@@ -399,8 +435,17 @@ class PlatformDriverAgent(Agent):
                     self.poll_scheduler.add_to_schedule(p)
 
     @RPC.export
-    def stop(self, topic: str | Sequence[str] | Set[str] = None, tag: str = None, regex: str = None) -> None:
-        points = self.equipment_tree.find_points(topic, regex, tag)
+    def stop(self, topic: str | Sequence[str] | Set[str] = None, regex: str = None) -> None:
+        points = self.equipment_tree.find_points(topic, regex)
+        self._stop(points)
+
+    @RPC.export
+    def semantic_stop(self, query: str) -> None:
+        topics = self.semantic_query(query)
+        points = self.equipment_tree.find_points(topics)
+        self._stop(points)
+
+    def _stop(self, points: Iterable[PointNode]) -> None:
         for p in points:
             if not p.active:
                 return
@@ -412,8 +457,17 @@ class PlatformDriverAgent(Agent):
                     self.poll_scheduler.remove_from_schedule(p)
 
     @RPC.export
-    def enable(self, topic: str | Sequence[str] | Set[str] = None, tag: str = None, regex: str = None) -> None:
-        nodes = self.equipment_tree.find_points(topic, regex, tag)
+    def enable(self, topic: str | Sequence[str] | Set[str] = None, regex: str = None) -> None:
+        nodes = self.equipment_tree.find_points(topic, regex)
+        self._enable(nodes)
+
+    @RPC.export
+    def semantic_enable(self, query: str) -> None:
+        topics = self.semantic_query(query)
+        points = self.equipment_tree.find_points(topics)
+        self._enable(points)
+
+    def _enable(self, nodes: Iterable[PointNode]):
         for node in nodes:
             node.config.active = True
             if not node.is_point:
@@ -423,8 +477,17 @@ class PlatformDriverAgent(Agent):
                 self.equipment_tree.update_stored_registry_config(node.identifier)
 
     @RPC.export
-    def disable(self, topic: str | Sequence[str] | Set[str] = None, tag: str = None, regex: str = None) -> None:
-        nodes = self.equipment_tree.find_points(topic, regex, tag)
+    def disable(self, topic: str | Sequence[str] | Set[str] = None, regex: str = None) -> None:
+        nodes = self.equipment_tree.find_points(topic, regex)
+        self._disable(nodes)
+
+    @RPC.export
+    def semantic_disable(self, query: str) -> None:
+        topics = self.semantic_query(query)
+        points = self.equipment_tree.find_points(topics)
+        self._disable(points)
+
+    def _disable(self, nodes: Iterable[PointNode]) -> None:
         for node in nodes:
             node.config.active = False
             if not node.is_point:
@@ -438,10 +501,14 @@ class PlatformDriverAgent(Agent):
         return self._status(nodes)
 
     @RPC.export
-    def status(self, topic: str | Sequence[str] | Set[str] = None, tag: str = None, regex: str = None) -> dict:
-        # TODO: Implement status()
-        nodes = self.equipment_tree.find_points(topic, regex, tag)
-        pass
+    def semantic_status(self, query: str) -> dict:
+        topics = self.semantic_query(query)
+        points = self.equipment_tree.find_points(topics)
+        return self._status(points)
+
+    def _status(self, points: Iterable[PointNode]) -> dict:
+        # TODO: Implement _status()
+        return {}
 
     @RPC.export
     def add_node(self, node_topic: str, config: dict, update_schedule: bool = True) -> dict|None:
