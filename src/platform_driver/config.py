@@ -1,7 +1,22 @@
-from pydantic import BaseModel, ConfigDict, Field
+from datetime import timedelta
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 latest_config_version = 2
+
+class GroupConfig(BaseModel):
+    minimum_polling_interval: float = 1.0
+    start_offset: timedelta = timedelta(seconds=0.0)
+    poll_scheduler_class_name: str = 'StaticCyclicPollScheduler'
+    poll_scheduler_module: str = 'platform_driver.poll_scheduler'
+    poll_scheduler_configs: BaseModel | None = None
+    parallel_subgroups: bool = False
+
+    @classmethod
+    @field_validator('start_offset', mode='before')
+    def _make_start_offset(cls, v):
+        return timedelta(seconds=v)
+
 
 class PlatformDriverConfig(BaseModel):
     model_config = ConfigDict(validate_assignment=True, populate_by_name=True)
@@ -15,18 +30,19 @@ class PlatformDriverConfig(BaseModel):
     breadth_first_base: str = 'points'
     default_polling_interval: float = 60
     depth_first_base: str = 'devices'
-    remote_heartbeat_interval: float = 60.0
+    groups: dict[str, GroupConfig] = {}
     group_offset_interval: float = 0.0
     max_concurrent_publishes: int = 10000
     max_open_sockets: int | None = None
     minimum_polling_interval: float = Field(default=0.02, alias='driver_scrape_interval')
-    poll_scheduler_configs: dict = {}
     poll_scheduler_class_name: str = 'StaticCyclicPollScheduler'
-    poll_scheduler_module_name: str = 'platform_driver.poll_scheduler'
+    poll_scheduler_configs: BaseModel | None = None
+    poll_scheduler_module: str = 'platform_driver.poll_scheduler'
     publish_single_depth: bool = Field(default=False, alias='publish_depth_first_single')
     publish_single_breadth: bool = Field(default=False, alias='publish_breadth_first_single')
     publish_all_breadth: bool = Field(default=False, alias='publish_breadth_first_all')
     publish_multi_breadth: bool = Field(default=False, alias='publish_breadth_first_multi')
+    remote_heartbeat_interval: float = 60.0
     reservation_preempt_grace_time: float = 60.0
     reservation_publish_interval: float = 60.0
     reservation_required_for_write: bool = False
@@ -37,6 +53,16 @@ class PlatformDriverConfig(BaseModel):
                            #  to create the timestamps that accompany them. They should really match
                            #  and (at least by default?) be global.
 
+    @model_validator(mode='after')
+    def _set_default_group(self):
+        if 'default' not in self.groups:
+            self.groups['default'] = GroupConfig(
+                minimum_interval=self.minimum_polling_interval,
+                poll_scheduler_class_name=self.poll_scheduler_class_name,
+                poll_scheduler_module=self.poll_scheduler_module,
+                start_offset=self.group_offset_interval,
+                parallel_subbgroups=True
+            )
 
 class PlatformDriverConfigV2(PlatformDriverConfig):
     config_version: int = 2

@@ -48,7 +48,7 @@ class EquipmentNode(TopicNode):
         self.data['config'] = value
 
     @property
-    def group(self) -> int:
+    def group(self) -> str:
         return self.data['config'].group
 
     @property
@@ -202,7 +202,7 @@ class EquipmentTree(TopicTree):
         self.remotes = WeakValueDictionary()
 
         root_config = self[self.root].data['config']
-        root_config.group = 0
+        root_config.group = 'default'
         root_config.polling_interval = agent.config.default_polling_interval
         root_config.publish_single_depth = agent.config.publish_single_depth
         root_config.publish_single_breadth = agent.config.publish_single_breadth
@@ -326,7 +326,7 @@ class EquipmentTree(TopicTree):
     def get_remote(self, nid: str) -> DriverAgent:
         return self.get_device_node(nid).remote
 
-    def get_group(self, nid: str) -> int:
+    def get_group(self, nid: str) -> str:
         return self[next(self.rsearch(nid, lambda n: n.group is not None))].group
 
     def get_point_topics(self, nid: str) -> tuple[str, str]:
@@ -355,6 +355,9 @@ class EquipmentTree(TopicTree):
 
     def is_published_all_breadth(self, nid: str) -> bool:
         return self[next(self.rsearch(nid, lambda n: n.publish_all_breadth is not None))].publish_all_breadth
+
+    def is_active(self, nid: str) -> bool:
+        return any(p.active for p in self.points(nid))
 
     def is_stale(self, nid: str) -> bool:
         return any(p.stale for p in self.points(nid))

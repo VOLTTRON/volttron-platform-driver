@@ -23,7 +23,6 @@
 # }}}
 
 import gevent
-import importlib
 import logging
 import os
 import subprocess
@@ -53,6 +52,7 @@ from .config import latest_config_version, PlatformDriverConfig, PlatformDriverC
 from .constants import *
 from .equipment import EquipmentTree, PointNode
 from .overrides import OverrideManager
+from .poll_scheduler import PollScheduler
 from .reservations import ReservationManager
 from .scalability_testing import ScalabilityTester
 
@@ -75,7 +75,7 @@ class PlatformDriverAgent(Agent):
         # Set up locations for helper objects:
         self.heartbeat_greenlet = None
         self.override_manager = None  # TODO: Should this initialize object here and call a load method on config?
-        self.poll_scheduler = None  # TODO: Should this use a default poll scheduler?
+        self.poll_schedulers = {}
         self.reservation_manager = None  # TODO: Should this use a default reservation manager?
         self.scalability_test = None
 
@@ -164,11 +164,6 @@ class PlatformDriverAgent(Agent):
         if self.override_manager is None:
             self.override_manager = OverrideManager(self)
 
-        # Set up Poll Scheduler:
-        poll_scheduler_module = importlib.import_module(self.config.poll_scheduler_module_name)
-        poll_scheduler_class = getattr(poll_scheduler_module, self.config.poll_scheduler_class_name)
-        self.poll_scheduler = poll_scheduler_class(self, **self.config.poll_scheduler_configs)
-
         # Set up Reservation Manager:
         if self.reservation_manager is None:
             now = get_aware_utc_now()
@@ -209,7 +204,10 @@ class PlatformDriverAgent(Agent):
   #              equipment_config['registry_config'] = self.vip.config.get(registry_location)
                 self._configure_new_equipment(c, 'NEW', equipment_config, schedule_now=False)
         # Schedule Polling
-        self.poll_scheduler.schedule()
+        self.poll_schedulers = PollScheduler.setup(self.equipment_tree, self.config.groups)
+        for poll_scheduler in self.poll_schedulers.values():
+            _log.debug(f'@@@@@@@@@@ CALLING SCHEDULE ON: {poll_scheduler}')
+            poll_scheduler.schedule()
         _log.debug("############ ENDING CONFIGURE_MAIN")
 
     @Core.receiver('onstart')
@@ -246,7 +244,8 @@ class PlatformDriverAgent(Agent):
             equipment_config = EquipmentConfig(**contents)
             self.equipment_tree.add_segment(equipment_name, equipment_config)
         if schedule_now:
-            self.poll_scheduler.schedule()
+            group = self.equipment_tree.get_group(equipment_name)
+            self.poll_schedulers[group].schedule()
 
     def _get_or_create_remote(self, equipment_name: str, remote_config: RemoteConfig, allow_duplicate_remotes):
         interface = self.interface_classes.get(remote_config.driver_type)
@@ -283,14 +282,18 @@ class PlatformDriverAgent(Agent):
             return
         # TODO: Implement UPDATE callback for /devices.
         _log.debug(f'############ {action} ACTION RAN! UH OH, NO LOCK!!! ##############')
-        self.poll_scheduler.check_for_reschedule()
+        group = self.equipment_tree.get_group(config_name)
+        poll_scheduler = self.poll_schedulers.get(group)
+        if poll_scheduler:
+            poll_scheduler.check_for_reschedule()
 
     def remove_equipment(self, config_name: str, _, __):
         """Callback to remove equipment configuration."""
+        group = self.equipment_tree.get_group(config_name)
         self.equipment_tree.remove_segment(config_name)
         # TODO: Implement override handling.
         # self._update_override_state(config_name, 'remove')
-        self.poll_scheduler.check_for_reschedule()
+        self.poll_schedulers[group].check_for_reschedule()
 
 
     ###############
@@ -428,10 +431,11 @@ class PlatformDriverAgent(Agent):
                 return
             else:
                 p.active = True
+                group = self.equipment_tree.get_group(p.identifier)
                 if self.config.allow_reschedule:
-                    self.poll_scheduler.schedule()
+                    self.poll_schedulers[group].schedule()
                 else:
-                    self.poll_scheduler.add_to_schedule(p)
+                    self.poll_schedulers[group].add_to_schedule(p)
 
     @RPC.export
     def stop(self, topic: str | Sequence[str] | Set[str] = None, regex: str = None) -> None:
@@ -450,10 +454,11 @@ class PlatformDriverAgent(Agent):
                 return
             else:
                 p.active = False
+                group = self.equipment_tree.get_group(p.identifier)
                 if self.config.allow_reschedule:
-                    self.poll_scheduler.schedule()
+                    self.poll_schedulers[group].schedule()
                 else:
-                    self.poll_scheduler.remove_from_schedule(p)
+                    self.poll_schedulers[group].remove_from_schedule(p)
 
     @RPC.export
     def enable(self, topic: str | Sequence[str] | Set[str] = None, regex: str = None) -> None:
@@ -554,6 +559,10 @@ class PlatformDriverAgent(Agent):
         parent = topic if self.equipment_tree.get_node(topic) else topic.rsplit('/', 1)[0]
         children = [c.identifier for c in self.equipment_tree.children(parent)]
         return children
+
+    @RPC.export
+    def get_poll_schedule(self):
+        return {group: scheduler.get_schedule() for group, scheduler in self.poll_schedulers.items()}
 
     #-------------
     # Reservations
