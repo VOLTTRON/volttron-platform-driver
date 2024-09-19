@@ -5,6 +5,7 @@ import logging
 from datetime import datetime
 from treelib.exceptions import DuplicatedNodeIdError
 from typing import Iterable, Optional, Union
+from weakref import WeakValueDictionary
 
 from volttron.client.known_identities import CONFIGURATION_STORE
 from volttron.driver.base.driver import DriverAgent
@@ -198,6 +199,8 @@ class EquipmentTree(TopicTree):
         super(EquipmentTree, self).__init__(root_name=agent.config.depth_first_base, node_class=EquipmentNode,
                                             *args, **kwargs)
         self.agent = agent
+        self.remotes = WeakValueDictionary()
+
         root_config = self[self.root].data['config']
         root_config.group = 0
         root_config.polling_interval = agent.config.default_polling_interval

@@ -69,7 +69,6 @@ class PlatformDriverAgent(Agent):
         self.config: PlatformDriverConfig = self._load_versioned_config(load_config(config_path) if config_path else {})
 
         # Initialize internal data structures:
-        self.remotes = WeakValueDictionary()
         self.equipment_tree = EquipmentTree(self)
         self.interface_classes = {}
 
@@ -268,13 +267,13 @@ class PlatformDriverAgent(Agent):
         else:
             unique_remote_id = BaseInterface.unique_remote_id(equipment_name, remote_config)
 
-        driver_agent = self.remotes.get(unique_remote_id)
+        driver_agent = self.equipment_tree.remotes.get(unique_remote_id)
         if not driver_agent:
             driver_agent = DriverAgent(remote_config, self.equipment_tree, self. scalability_test, self.config.timezone,
                                        unique_remote_id, self.vip)
             gevent.spawn(driver_agent.core.run)
             # TODO: Were the right number spawned? Need more debug code to ascertain this is working correctly.
-            self.remotes[unique_remote_id] = driver_agent
+            self.equipment_tree.remotes[unique_remote_id] = driver_agent
         return driver_agent
 
     def update_equipment(self, config_name: str, action: str, contents: dict):
@@ -837,7 +836,7 @@ class PlatformDriverAgent(Agent):
         # TODO: Make sure this is being called with the full topic.
         # TODO: Should this still be exposed if the actuator agent no longer needs to send to this?
         _log.debug("sending heartbeat")
-        for remote in self.remotes.values():
+        for remote in self.equipment_tree.remotes.values():
             remote.heart_beat()
 
     @RPC.export
