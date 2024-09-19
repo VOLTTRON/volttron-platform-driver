@@ -439,7 +439,7 @@ class ReservationManager(object):
     def save_state(self, now):
         try:
             self._cleanup(now)
-            _log.debug(f"Saving {len(self.tasks)} task")
+            _log.debug(f"Saving {len(self.tasks)} task(s)")
             self.parent.vip.config.set(self.reservation_state_file, b64encode(dumps(self.tasks)).decode("utf-8"), send_update=False)
 
         except Exception as e:
