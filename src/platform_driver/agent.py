@@ -41,10 +41,9 @@ from volttron.client.messaging.health import STATUS_BAD
 from volttron.client.messaging.utils import normtopic
 from volttron.client.vip.agent import Agent, Core
 from volttron.client.vip.agent.subsystems.rpc import RPC
-from volttron.driver.base.driver import BaseInterface, DriverAgent, RemoteConfig
+from volttron.driver.base.driver import BaseInterface, DriverAgent
 from volttron.driver.base.driver_locks import configure_publish_lock, setup_socket_lock
-from volttron.driver.base.config import DeviceConfig, EquipmentConfig
-from volttron.driver import interfaces
+from volttron.driver.base.config import DeviceConfig, EquipmentConfig, RemoteConfig
 from volttron.utils import format_timestamp, get_aware_utc_now, load_config, setup_logging, vip_main
 from volttron.utils.jsonrpc import RemoteError
 
@@ -541,7 +540,11 @@ class PlatformDriverAgent(Agent):
     @RPC.export
     def list_interfaces(self) -> list[str]:
         """Return list of all installed driver interfaces."""
-        return [i.name for i in iter_modules(interfaces.__path__)]
+        try:
+            from volttron.driver import interfaces
+            return [i.name for i in iter_modules(interfaces.__path__)]
+        except ImportError:
+            return []
 
     @RPC.export
     def remove_interface(self, interface_name: str) -> dict | None:
