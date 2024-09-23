@@ -57,12 +57,13 @@ class PlatformDriverConfig(BaseModel):
     def _set_default_group(self):
         if 'default' not in self.groups:
             self.groups['default'] = GroupConfig(
-                minimum_interval=self.minimum_polling_interval,
+                minimum_polling_interval=self.minimum_polling_interval,
                 poll_scheduler_class_name=self.poll_scheduler_class_name,
                 poll_scheduler_module=self.poll_scheduler_module,
                 start_offset=self.group_offset_interval,
-                parallel_subbgroups=True
+                parallel_subgroups=True
             )
+        return self
 
 class PlatformDriverConfigV2(PlatformDriverConfig):
     config_version: int = 2

@@ -190,7 +190,13 @@ class PointNode(EquipmentNode):
             return False
         elif self.data['config'].stale_timeout is None:
             return False
+        elif self.last_updated is None:
+            return True
         else:
+            now = get_aware_utc_now()
+            if now - self.last_updated > self.data['config'].stale_timeout:
+                _log.debug(f'{self.tag} is stale --- now: {now}, last_updated: {self.last_updated},'
+                           f' stale_timeout: {self.data["config"].stale_timeout}, interval: {self.polling_interval}')
             return True if get_aware_utc_now() - self.last_updated > self.data['config'].stale_timeout else False
 
 
@@ -272,7 +278,7 @@ class EquipmentTree(TopicTree):
         for segment in topic:
             nid = '/'.join([parent, segment])
             try:
-                node = EquipmentNode(tag=segment, identifier=nid, config={})
+                node = EquipmentNode(tag=segment, identifier=nid, config=EquipmentConfig())
                 self.add_node(node, parent)  # TODO: This does raise the DuplicatedNodeIdError, not just replace, right?
             except DuplicatedNodeIdError:
                 # TODO: How to handle updates if this node is the intended target?

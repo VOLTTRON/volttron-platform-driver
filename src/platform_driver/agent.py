@@ -29,11 +29,10 @@ import subprocess
 import sys
 
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from pkgutil import iter_modules
 from pydantic import ValidationError
 from typing import Iterable, Sequence, Set
-from weakref import WeakValueDictionary
 
 from volttron.client.commands.install_agents import InstallRuntimeError
 from volttron.client.known_identities import PLATFORM_DRIVER
@@ -44,8 +43,10 @@ from volttron.client.vip.agent.subsystems.rpc import RPC
 from volttron.driver.base.driver import BaseInterface, DriverAgent
 from volttron.driver.base.driver_locks import configure_publish_lock, setup_socket_lock
 from volttron.driver.base.config import DeviceConfig, EquipmentConfig, RemoteConfig
+from volttron.driver.base.utils import publication_headers, publish_wrapper
 from volttron.utils import format_timestamp, get_aware_utc_now, load_config, setup_logging, vip_main
 from volttron.utils.jsonrpc import RemoteError
+from volttron.utils.scheduling import periodic
 
 from .config import latest_config_version, PlatformDriverConfig, PlatformDriverConfigV1, PlatformDriverConfigV2
 from .constants import *
@@ -75,6 +76,7 @@ class PlatformDriverAgent(Agent):
         self.heartbeat_greenlet = None
         self.override_manager = None  # TODO: Should this initialize object here and call a load method on config?
         self.poll_schedulers = {}
+        self.publishers = {}
         self.reservation_manager = None  # TODO: Should this use a default reservation manager?
         self.scalability_test = None
 
@@ -196,24 +198,19 @@ class PlatformDriverAgent(Agent):
         for c in self.vip.config.list():
             if 'devices/' in c[:8]:
                 equipment_config = self.vip.config.get(c)
-                _log.debug('GOT EQUIPMENT CONFIG: ')
-                _log.debug(equipment_config)
-#                registry_location = equipment_config['registry_config']#[len('config://'):]
- #               _log.debug(f'############ ATTEMPTING TO RETRIEVE REGISTRY CONFIG FROM: {registry_location}')
-  #              equipment_config['registry_config'] = self.vip.config.get(registry_location)
                 self._configure_new_equipment(c, 'NEW', equipment_config, schedule_now=False)
         # Schedule Polling
         self.poll_schedulers = PollScheduler.setup(self.equipment_tree, self.config.groups)
         for poll_scheduler in self.poll_schedulers.values():
-            _log.debug(f'@@@@@@@@@@ CALLING SCHEDULE ON: {poll_scheduler}')
             poll_scheduler.schedule()
+        self._start_all_publishes()
         _log.debug("############ ENDING CONFIGURE_MAIN")
 
     @Core.receiver('onstart')
     def on_start(self, _):
         # Remove the equipment_config_lock after the on configure event has completed. Initial configuration of all
         #  equipment should be complete. We can now allow update events to run.
-        _log.error(f"########## RUNNING ON_START (REMOVING LOCK).")
+        _log.debug(f"########## RUNNING ON_START (REMOVING LOCK).")
         self.equipment_config_lock = False
 
     def _configure_new_equipment(self, equipment_name: str, _, contents: dict, schedule_now: bool = True):
@@ -294,6 +291,41 @@ class PlatformDriverAgent(Agent):
         # self._update_override_state(config_name, 'remove')
         self.poll_schedulers[group].check_for_reschedule()
 
+    def _start_all_publishes(self):
+        # TODO: Can we just schedule and let the stale property work its magic?
+        for device in self.equipment_tree.devices(self.equipment_tree.root):
+            if (device.all_publish_interval
+                    and self.equipment_tree.is_published_all_depth(device.identifier)
+                    or self.equipment_tree.is_published_all_breadth(device.identifier)):
+                # TODO: Base Interface and/or remote needs a timeout config. BACnet has this, but not universal.
+                # last_start + timeout should guarantee that the first polls have been made of all points.
+                # TODO: Is this calculation still necessary after adding stale property to points?
+                timeout = timedelta(seconds=30)  # TODO: This seems really long, but it is the default on BACnet.
+                start_all_datatime = max(poller.start_all_datetime + timeout for poller in self.poll_schedulers.values())
+                self.publishers[device] = self.core.schedule(
+                    periodic(device.all_publish_interval, start=start_all_datatime), self._all_publish, device
+                )
+
+    def _all_publish(self, node):
+        device_node = self.equipment_tree.get_node(node.identifier)
+        if self.equipment_tree.is_stale(device_node.identifier):
+            # TODO: Is this the correct thing to do here?
+            _log.warning(f'Skipping all publish of device: {device_node.identifier}. Data is stale.')
+        else:
+            headers = publication_headers()
+            depth_topic, breadth_topic = self.equipment_tree.get_device_topics(device_node.identifier)
+            points = self.equipment_tree.points(device_node.identifier)
+            if self.equipment_tree.is_published_all_depth(device_node.identifier):
+                publish_wrapper(self.vip, f'{depth_topic}/all', headers=headers, message=[
+                    {p.identifier.rsplit('/', 1)[-1]: p.last_value for p in points},
+                    # TODO: Fix where meta_data goes.
+                    {p.identifier.rsplit('/', 1)[-1]: p.meta_data for p in points}
+                ])
+            elif self.equipment_tree.is_published_all_breadth(device_node.identifier):
+                publish_wrapper(self.vip, f'{breadth_topic}/all', headers=headers, message=[
+                    {p.identifier.rsplit('/', 1)[-1]: p.last_value for p in points},
+                    {p.identifier.rsplit('/', 1)[-1]: p.meta_data for p in points}
+                ])
 
     ###############
     # Query Backend
