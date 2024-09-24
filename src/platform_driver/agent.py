@@ -402,23 +402,35 @@ class PlatformDriverAgent(Agent):
                 results.update(remote.get_multiple_points([p.identifier for p in point_set]))
 
     @RPC.export
-    def revert(self, topic: str | Sequence[str] | Set[str] = None, regex: str = None,
-              confirm_values: bool = False) -> dict:
+    def revert(self, topic: str | Sequence[str] | Set[str] = None, regex: str = None) -> dict[str, str]:
+              # confirm_values: bool = False) -> dict:
         query_plan = self.build_query_plan(topic, regex)
-        return self._revert(query_plan, confirm_values)
+        return self._revert(query_plan)  # , confirm_values)
 
     @RPC.export
-    def semantic_revert(self, query: str, confirm_values: bool = False) -> dict:
+    def semantic_revert(self, query: str) -> dict[str, str]:  #, confirm_values: bool = False) -> dict:
         exact_matches = self.semantic_query(query)
         query_plan = self.build_query_plan(exact_matches)
-        return self._revert(query_plan, confirm_values)
+        return self._revert(query_plan)  #, confirm_values)
 
-    def _revert(self, query_plan, confirm_values: bool):
-        # Set selected points on each remote:
+    @staticmethod
+    def _revert(query_plan) -> dict[str, str]:  #, confirm_values: bool) -> dict[str, str]:
+        """
+        Revert each point from query.
+          If an exception is raised, return it in the error dict.
+        """
+        # TODO: If it is possible to check values, we may need to do that at the interface level.
+        #  No functionality exists for this now.
+        errors = {}
         for (remote, point_set) in query_plan.items():
-            # TODO: How to handle all/single/multiple reverts? Detect devices, and otherwise use revert_point? Add revert_multiple?
-            pass
-        return {} # TODO: What to return for this? The current methods return None.
+            for point in point_set:
+                try:
+                    remote.revert_point(point.identifier)
+                except Exception as e:
+                    # TODO: revert_point may not raise. Does _set_point, typically?  If we make them raise,
+                    #  we can return some errors, at least. It may not be possible to check success in all cases.
+                    errors[point.identifier] = str(e)
+        return errors
 
     @RPC.export
     def last(self, topic: str | Sequence[str] | Set[str] = None, regex: str = None,
