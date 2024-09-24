@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from math import floor, gcd, lcm
 from weakref import WeakKeyDictionary, WeakValueDictionary, WeakSet
 
+from volttron.client.vip.agent.core import ScheduledEvent
 from volttron.utils import get_aware_utc_now, setup_logging
 
 from .config import GroupConfig
@@ -20,13 +21,13 @@ _log = logging.getLogger(__name__)
 class PollScheduler:
     interval_dicts: dict[str, WeakKeyDictionary] = defaultdict(WeakKeyDictionary)  # Class variable TODO: Needed?
 
-    def __init__(self, data_model, group, group_config, **kwargs):
+    def __init__(self, data_model: EquipmentTree, group: str, group_config: GroupConfig, **kwargs):
         self.data_model: EquipmentTree = data_model
-        self.group = group
+        self.group: str = group
         self.group_config: GroupConfig = group_config
 
-        self.start_all_datetime = get_aware_utc_now()
-        self.pollers = {}
+        self.start_all_datetime: datetime = get_aware_utc_now()
+        self.pollers: dict[str, ScheduledEvent] = {}
 
     def schedule(self):
         self._prepare_to_schedule()
@@ -163,9 +164,9 @@ class StaticCyclicPollScheduler(PollScheduler):
         return return_dict
 
     @staticmethod
-    def calculate_hyper_period(intervals, minimum_polling_interval):
+    def calculate_hyperperiod(intervals, minimum_polling_interval):
         return lcm(*[floor(i / minimum_polling_interval) for i in intervals]) * minimum_polling_interval
-        # Usage: hyper_period = self.calculate_hyper_period(self.interval_dict.keys(), group_config.minimum_polling_interval)
+        
 
     @staticmethod
     def _separate_coprimes(intervals):
@@ -202,21 +203,20 @@ class StaticCyclicPollScheduler(PollScheduler):
                          f' less frequently.')
         remote_offsets = {r: i * min_remote_offset for i, r in enumerate(all_remotes)}
         for interval_set in coprime_interval_sets:
-            hyper_period = self.calculate_hyper_period(interval_set, min(interval_set))
+            hyperperiod = self.calculate_hyperperiod(interval_set, min(interval_set))
             for interval in interval_set:
-                s_count = int(hyper_period / interval)
+                s_count = int(hyperperiod / interval)
                 remote_spread = interval / len(input_dict[interval].keys())
                 spread = min_spread if self.group_config.parallel_subgroups else max(min_spread, remote_spread)
                 for slot, remote in [((interval * i) + (spread * r) + remote_offsets[remote] + parallel_offset , remote)
                                      for i in range(s_count) for r, remote in enumerate(input_dict[interval].keys())]:
-                    plan = slot_plan[timedelta(seconds=hyper_period)][timedelta(seconds=slot)]
+                    plan = slot_plan[timedelta(seconds=hyperperiod)][timedelta(seconds=slot)]
                     if not plan.get('points'):
                         plan['points'] = WeakValueDictionary()
                     plan['remote'] = remote
                     plan['points'].update({p.identifier: p for p in input_dict[interval][remote]})
                     plan['publish_setup'] = self._setup_publish(input_dict[interval][remote], plan.get('publish_setup'))
-                    _log.debug(f'@@@@@@@@@ PLAN FOR {self.group}--{hyper_period}--{slot}--{remote.unique_id[0].split("/")[-1]}: {[k.split("/")[3] for k in plan["points"].keys()]}')
-        return {hyper_period: dict(sorted(sp.items())) for hyper_period, sp in slot_plan.items()}
+        return {hyperperiod: dict(sorted(sp.items())) for hyperperiod, sp in slot_plan.items()}
 
     @staticmethod
     def get_poll_generator(hyperperiod_start, hyperperiod, slot_plan):
@@ -249,21 +249,14 @@ class StaticCyclicPollScheduler(PollScheduler):
             self.poll_sets.append(self._find_slots(input_dict))
 
     def _schedule_polling(self):
-        # TODO: How to ensure minimum_polling_interval? Commented code works but isn't very useful. It is simple
-        #  to ensure delayed initial_start times, but that doesn't prevent collisions between individual polls in
+        # TODO: How to fully ensure min_polling_interval? Nothing yet prevents collisions between individual polls in
         #  separate schedules. Is it worth keeping these apart if it requires a check for each slot at schedule time?
-        #  Just for one remote? For the whole platform?
-        #  Alternately, could create a global lock that oscillates at the minimum_polling_interval and check it at poll
-        #  time for the next allowed time to start.
-        #minimum_polling_interval = timedelta(seconds=group_config.minimum_polling_interval)
-        #_log.debug(f'@@@@@@@@@@ MINIMUM POLLING INTERVAL: {minimum_polling_interval} @@@@@@@@@@@@@@@@@@@@@@@@@@@@')
-        #next_available_start_time = get_aware_utc_now()
-        for poll_set in self.poll_sets: # TODO: Is it a problem that hyperperiods would run in parallel within groups?
+        #  Or, create global lock oscillating at min_poll_interval - check on poll for the next allowed start time?
+        for poll_set in self.poll_sets:
             for hyperperiod, slot_plan in poll_set.items():
-                initial_start = self.find_starting_datetime(get_aware_utc_now(), hyperperiod,  # Replace get_aware_utc_now with next_available_start_time?
+                initial_start = self.find_starting_datetime(get_aware_utc_now(), hyperperiod,
                                                             self.group_config.start_offset)
-     #           next_available_start_time = max(initial_start + minimum_polling_interval, get_aware_utc_now())
-                self.start_all_datetime = max(self.start_all_datetime, initial_start)
+                self.start_all_datetime = max(self.start_all_datetime, initial_start + hyperperiod)
                 poll_generator = self.get_poll_generator(initial_start, hyperperiod, slot_plan)
                 start, points, publish_setup, remote = next(poll_generator)
                 _log.info(f'Scheduled polling for {self.group}--{hyperperiod} starts at {start.time()}')

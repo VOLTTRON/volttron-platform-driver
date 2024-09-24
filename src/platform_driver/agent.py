@@ -121,6 +121,7 @@ class PlatformDriverAgent(Agent):
         _log.debug(self.config)
         if action == "NEW":
             self.config = new_config
+            self.equipment_tree = EquipmentTree(self)
             try:
                 setup_socket_lock(self.config.max_open_sockets)
                 configure_publish_lock(int(self.config.max_concurrent_publishes))
@@ -160,7 +161,6 @@ class PlatformDriverAgent(Agent):
                 _log.info("Running scalability test. Settings may not be changed without restart.")
                 return
             self.config = new_config
-
         # TODO: Should this be in a try block? The old version was, but called loads().
         if self.override_manager is None:
             self.override_manager = OverrideManager(self)
@@ -199,10 +199,13 @@ class PlatformDriverAgent(Agent):
             if 'devices/' in c[:8]:
                 equipment_config = self.vip.config.get(c)
                 self._configure_new_equipment(c, 'NEW', equipment_config, schedule_now=False)
+
         # Schedule Polling
         self.poll_schedulers = PollScheduler.setup(self.equipment_tree, self.config.groups)
         for poll_scheduler in self.poll_schedulers.values():
             poll_scheduler.schedule()
+
+        # Set up All Publishes:
         self._start_all_publishes()
         _log.debug("############ ENDING CONFIGURE_MAIN")
 
@@ -297,19 +300,17 @@ class PlatformDriverAgent(Agent):
             if (device.all_publish_interval
                     and self.equipment_tree.is_published_all_depth(device.identifier)
                     or self.equipment_tree.is_published_all_breadth(device.identifier)):
-                # TODO: Base Interface and/or remote needs a timeout config. BACnet has this, but not universal.
-                # last_start + timeout should guarantee that the first polls have been made of all points.
-                # TODO: Is this calculation still necessary after adding stale property to points?
-                timeout = timedelta(seconds=30)  # TODO: This seems really long, but it is the default on BACnet.
-                start_all_datatime = max(poller.start_all_datetime + timeout for poller in self.poll_schedulers.values())
+                # Schedule first publish at end of first polling cycle to guarantee all points should have data.
+                start_all_datatime = max(poller.start_all_datetime for poller in self.poll_schedulers.values())
                 self.publishers[device] = self.core.schedule(
                     periodic(device.all_publish_interval, start=start_all_datatime), self._all_publish, device
                 )
 
     def _all_publish(self, node):
         device_node = self.equipment_tree.get_node(node.identifier)
+        if not self.equipment_tree.is_ready(device_node.identifier):
+            _log.info(f'Skipping all publish of device: {device_node.identifier}. Data is not yet ready.')
         if self.equipment_tree.is_stale(device_node.identifier):
-            # TODO: Is this the correct thing to do here?
             _log.warning(f'Skipping all publish of device: {device_node.identifier}. Data is stale.')
         else:
             headers = publication_headers()
@@ -318,7 +319,6 @@ class PlatformDriverAgent(Agent):
             if self.equipment_tree.is_published_all_depth(device_node.identifier):
                 publish_wrapper(self.vip, f'{depth_topic}/all', headers=headers, message=[
                     {p.identifier.rsplit('/', 1)[-1]: p.last_value for p in points},
-                    # TODO: Fix where meta_data goes.
                     {p.identifier.rsplit('/', 1)[-1]: p.meta_data for p in points}
                 ])
             elif self.equipment_tree.is_published_all_breadth(device_node.identifier):

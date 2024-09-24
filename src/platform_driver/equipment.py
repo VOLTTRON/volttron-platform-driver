@@ -364,6 +364,9 @@ class EquipmentTree(TopicTree):
     def is_active(self, nid: str) -> bool:
         return any(p.active for p in self.points(nid))
 
+    def is_ready(self, nid: str) -> bool:
+        return not any(p.last_updated is None for p in self.points(nid))
+
     def is_stale(self, nid: str) -> bool:
         return any(p.stale for p in self.points(nid))
 
