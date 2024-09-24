@@ -23,10 +23,8 @@
 # }}}
 
 import bisect
-import json
 import logging
 import pickle
-import base64
 
 from base64 import b64encode
 from collections import defaultdict, namedtuple

@@ -15,7 +15,7 @@ class TestStaticCyclicPollScheduler:
     def test_calculate_hyper_period(self, scheduler):
         intervals = [4, 5, 6]
         minimum_polling_interval = 1
-        result = scheduler.calculate_hyper_period(intervals, minimum_polling_interval)
+        result = scheduler.calculate_hyperperiod(intervals, minimum_polling_interval)
         assert result == 60    # LCM of 4, 5, 6 is 60
 
     def test_prepare_to_schedule(self, scheduler):

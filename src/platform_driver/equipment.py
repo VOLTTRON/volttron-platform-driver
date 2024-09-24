@@ -1,5 +1,4 @@
 import gevent
-import json
 import logging
 
 from datetime import datetime
@@ -11,7 +10,7 @@ from volttron.client.known_identities import CONFIGURATION_STORE
 from volttron.driver.base.driver import DriverAgent
 from volttron.driver.base.config import DataSource, DeviceConfig, EquipmentConfig
 from volttron.lib.topic_tree import TopicNode, TopicTree
-from volttron.utils import get_aware_utc_now, setup_logging
+from volttron.utils import get_aware_utc_now, parse_json_config, setup_logging
 
 from .overrides import OverrideError
 from .reservations import ReservationLockError
@@ -225,7 +224,7 @@ class EquipmentTree(TopicTree):
         try:
             remote_conf_json = self.agent.vip.rpc.call(CONFIGURATION_STORE, 'manage_get',self.agent.core.identity,
                                                         nid).get(timeout=5)
-            remote_conf = json.loads(remote_conf_json)
+            remote_conf = parse_json_config(remote_conf_json)
         except (Exception, gevent.Timeout) as e:
             _log.warning(f'Unable to get registry_name for device: {nid} -- {e}')
         finally:

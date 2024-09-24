@@ -2,7 +2,6 @@
 # PYTHON_ARGCOMPLETE_OK
 import argcomplete
 import argparse
-import json
 import logging
 import os
 import sys
@@ -10,7 +9,7 @@ import sys
 from pprint import pprint
 
 from volttron.client.commands.connection import ControlConnection
-from volttron.utils import get_address
+from volttron.utils import get_address, parse_json_config
 
 _log = logging.getLogger(os.path.basename(sys.argv[0]) if __name__ == "__main__" else __name__)
 
@@ -56,7 +55,7 @@ def driver_status_func(args):
 def driver_node_add_func(args):
     if not args.config and args.config_path:
         with open(args.config_path) as f:
-            config = json.load(f)
+            config = parse_json_config(f)
     else:
         config = args.config
     return connection.call('add_node', node_topic=args.topic, config=config, update_schedule=args.update_schedule)
