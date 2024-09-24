@@ -76,6 +76,10 @@ class EquipmentNode(TopicNode):
         return True if self.segment_type == 'DEVICE' else False
 
     @property
+    def is_concrete(self) -> bool:
+        return False if self.segment_type == 'TOPIC_SEGMENT' else True
+
+    @property
     def overridden(self) -> bool:
         return self.data['overridden']
 
@@ -122,6 +126,11 @@ class EquipmentNode(TopicNode):
     @reserved.setter
     def reserved(self, holder: str):
         self.data['reserved_by'] = holder
+
+    def wipe_configuration(self):
+        # Wipe all data and reset segment_type to TOPIC_SEGMENT.
+        self.data = {'segment_type': 'TOPIC_SEGMENT'}
+
 
 class DeviceNode(EquipmentNode):
     def __init__(self, config, driver, *args, **kwargs):
@@ -287,14 +296,28 @@ class EquipmentTree(TopicTree):
             node.config = config
         return nid
 
-    def remove_segment(self, identifier: str):
-        node = self.get_node(identifier)
+    def has_concrete_successors(self, nid: str) -> bool:
+        children = self.children(nid)
+        if any([c.is_concrete() for c in children]):
+            return True
+        else:
+            for child in children:
+                if self.has_concrete_successors(child.identifier):
+                    return True
+        return False
+
+    def remove_segment(self, nid: str, leave_disconnected: bool = False) -> int:
+        node = self.get_node(nid)
         if node.is_device:
             node.stop_device()
-        if node.has_concrete_successors(self): # TODO: Implement EquipmentNode.has_concrete_successors().
-            node.wipe_configuration()  # TODO: Implement EquipmentNode.wipe_configuration().
+        if leave_disconnected and self.has_concrete_successors(nid):
+            node.wipe_configuration()
+            removed_node_count = 1
         else:
-            self.remove_node(node.identifier) # Removes node and the subtree below.
+            for device in self.devices(nid):
+                device.stop_device()
+            removed_node_count = self.remove_node(node.identifier) # Removes node and the subtree below.
+        return removed_node_count
 
     def points(self, nid: str = None) -> Iterable[PointNode]:
         if nid is None:

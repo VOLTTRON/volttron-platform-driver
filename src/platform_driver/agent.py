@@ -559,13 +559,12 @@ class PlatformDriverAgent(Agent):
 
     @RPC.export
     def add_node(self, node_topic: str, config: dict, update_schedule: bool = True) -> dict|None:
-        self._configure_new_equipment(node_topic, 'NEW', contents=config, schedule_now=update_schedule)
+        self.update_equipment(node_topic, 'NEW', contents=config, schedule_now=update_schedule)
         # TODO: What should this return? If error_dict, how to get this?
 
     @RPC.export
-    def remove_node(self, node_topic: str) -> dict|None:
-        self.equipment_tree.remove_segment(node_topic)
-        # TODO: What should this return? If error_dict, how to get this?
+    def remove_node(self, node_topic: str, leave_disconnected: bool = False) -> bool:
+        return True if self.equipment_tree.remove_segment(node_topic, leave_disconnected) > 0 else False
 
     @RPC.export
     def add_interface(self, interface_name: str, local_path: str = None) -> dict|None:
