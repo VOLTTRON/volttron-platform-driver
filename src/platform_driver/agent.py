@@ -593,7 +593,7 @@ class PlatformDriverAgent(Agent):
 
     def _status(self, points: Iterable[PointNode]) -> dict:
         # TODO: Implement _status()
-        return {}
+        return {'error': 'Status reporting is not yet implemented'}
 
     @RPC.export
     def add_node(self, node_topic: str, config: dict, update_schedule: bool = True) -> bool:
@@ -604,18 +604,18 @@ class PlatformDriverAgent(Agent):
         return True if self.equipment_tree.remove_segment(node_topic, leave_disconnected) > 0 else False
 
     @RPC.export
-    def add_interface(self, interface_name: str, local_path: str = None) -> dict|None:
+    def add_interface(self, interface_name: str, local_path: str = None) -> bool:
         ### ADAPTED FROM volttron.client.install_agents.install_agent_vctl
         if os.path.isdir(interface_name):
-        #     # TODO: Install from directory (see install_agent_directory in volttron.client.install_agents.py)
-             pass
+            pass # TODO: Install from directory (see install_agent_directory in volttron.client.install_agents.py)
         elif interface_name.endswith(".whl") and not os.path.isfile(interface_name):
             raise InstallRuntimeError(f"Invalid wheel file {interface_name}")
             # TODO: Seems like there should be another elif after this.
         else:
             interface_package = self._interface_package_from_short_name(interface_name)
-            subprocess.run([sys.executable, '-m', 'pip', 'install', interface_package])
+            sp_result = subprocess.run([sys.executable, '-m', 'pip', 'install', interface_package])
         # TODO: What should this be returning?  If error_dict, how to get this?s
+        return False if sp_result.returncode else True
 
     @RPC.export
     def list_interfaces(self) -> list[str]:
@@ -627,21 +627,26 @@ class PlatformDriverAgent(Agent):
             return []
 
     @RPC.export
-    def remove_interface(self, interface_name: str) -> dict | None:
+    def remove_interface(self, interface_name: str) -> bool:
         interface_package = self._interface_package_from_short_name(interface_name)
-        subprocess.run([sys.executable, '-m', 'pip', 'uninstall', interface_package])
-        # TODO: What should this be returning?  If error_dict, how to get this?
+        sp_result = subprocess.run([sys.executable, '-m', 'pip', 'uninstall', interface_package])
+        return False if sp_result.returncode else True
 
     @RPC.export
-    def list_topics(self, topic: str, tag: str = None, regex: str = None,
-                    active: bool = False, enable: bool = False) -> list[str]:
-        # TODO: Fix issue with topics coming back from Remote.
-        # TODO: Handle regex and tags.
-        # TODO: Handle active and enable (exclude non-active and exclude non-enabled) flags.
+    def list_topics(self, topic: str, regex: str = None,
+                    active: bool = False, enabled: bool = False) -> list[str]:
+        # TODO: Semantic version?
         topic = topic.strip('/') if topic and topic.startswith(self.equipment_tree.root) else self.equipment_tree.root
         parent = topic if self.equipment_tree.get_node(topic) else topic.rsplit('/', 1)[0]
-        children = [c.identifier for c in self.equipment_tree.children(parent)]
-        return children
+        children = self.equipment_tree.children(parent)
+        regex = re.compile(regex) if regex else None
+        if regex:
+            children = [c for c in children if regex.search(c)]
+        if active:
+            children = [c for c in children if c.active]
+        if enabled:
+            children = [c for c in children if c.enabled]
+        return [c.identifier for c in children]
 
     @RPC.export
     def get_poll_schedule(self):
