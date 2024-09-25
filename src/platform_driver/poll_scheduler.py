@@ -37,7 +37,7 @@ class PollScheduler:
     def setup(cls, data_model, group_configs):
         """
         Sort points from each of the remote's EquipmentNodes by interval:
-            Build interval_dict for each group as: {remote: {interval: WeakSet(points)}}}
+            Build cls.interval_dict  as: {group: {remote: {interval: WeakSet(points)}}}}
         """
         for remote in data_model.remotes.values():
             interval_dict = defaultdict(lambda: defaultdict(WeakSet))
@@ -50,6 +50,7 @@ class PollScheduler:
                     groups.add(group)
 
             for group in groups:
+                # TODO: Was there a reason this isn't just assigned this way three lines above?
                 cls.interval_dicts[group][remote] = interval_dict[group]
         poll_schedulers = {}
         for i, group in enumerate(cls.interval_dicts):
