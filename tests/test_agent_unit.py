@@ -96,7 +96,7 @@ class TestPlatformDriverAgentUpdateEquipment:
 
 
 class TestPlatformDriverAgentRemoveEquipment:
-    """Tests for remove_equipment."""
+    """Tests for _remove_equipment."""
     # TODO wait for function to be fully finished
     pass
 

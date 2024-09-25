@@ -8,7 +8,7 @@ from weakref import WeakValueDictionary
 
 from volttron.client.known_identities import CONFIGURATION_STORE
 from volttron.driver.base.driver import DriverAgent
-from volttron.driver.base.config import DataSource, DeviceConfig, EquipmentConfig
+from volttron.driver.base.config import DataSource, DeviceConfig, EquipmentConfig, PointConfig
 from volttron.lib.topic_tree import TopicNode, TopicTree
 from volttron.utils import get_aware_utc_now, parse_json_config, setup_logging
 
@@ -52,11 +52,11 @@ class EquipmentNode(TopicNode):
 
     @property
     def meta_data(self) -> dict:
-        return self.data['config'].meta_data
-    # TODO: How does this fit with the metadata in the interface used for registers (points)?
+        return self.data['meta_data']
+
     @meta_data.setter
     def meta_data(self, value: dict):
-        self.data['config'].meta_data = value
+        self.data['meta_data'] = value
 
     @property
     def polling_interval(self) -> float:
@@ -139,6 +139,7 @@ class DeviceNode(EquipmentNode):
         self.data['remote']: DriverAgent = driver
         self.data['registry_name'] = None
         self.data['segment_type'] = 'DEVICE'
+        self.config_finished = False
 
     @property
     def all_publish_interval(self) -> float:
@@ -239,8 +240,8 @@ class EquipmentTree(TopicTree):
         finally:
             return remote_conf.get('registry_config')
 
-    def add_device(self, device_topic: str, config: DeviceConfig, driver_agent: DriverAgent,
-                   registry_config: list[dict]):
+    def add_device(self, device_topic: str, dev_config: DeviceConfig, driver_agent: DriverAgent,
+                   registry_config: list[PointConfig]):
         """
         Add Device
         Adds a device node to the equipment tree. Also adds any necessary ancestor topic nodes and child point nodes.
@@ -253,7 +254,7 @@ class EquipmentTree(TopicTree):
 
         # Set up the device node itself.
         try:
-            device_node = DeviceNode(config=config, driver=driver_agent, tag=device_name, identifier=device_topic)
+            device_node = DeviceNode(config=dev_config, driver=driver_agent, tag=device_name, identifier=device_topic)
             device_node.data['registry_name'] = self._set_registry_name(device_node.identifier)
             self.add_node(device_node, parent=parent)
         except DuplicatedNodeIdError:
@@ -261,20 +262,48 @@ class EquipmentTree(TopicTree):
             device_node = self.get_node(device_topic)
 
         # Set up any point nodes which are children of this device.
-        for reg in registry_config:
-            # If there are fields in device config for all registries, add them where they are not overridden:
-            for k, v in config.equipment_specific_fields.items():
-                if not reg.get(k):
-                    reg[k] = v
-            point_config = self.agent.interface_classes[driver_agent.config.driver_type].config_class(**reg)
+        for point_config in registry_config:
             try:
                 node = PointNode(config=point_config, tag=point_config.volttron_point_name,
-                                 identifier=('/'.join([device_topic, point_config.volttron_point_name])))
+                                 identifier='/'.join([device_topic, point_config.volttron_point_name]))
                 self.add_node(node, parent=device_topic)
             except DuplicatedNodeIdError:
                 _log.warning(f'Duplicate Volttron Point Name "{point_config.volttron_point_name}" on {device_topic}.'
-                             f'Duplicate register will not be created. Please ensure ')
+                             f'Duplicate register will not be created. Please update the configuration to ensure'
+                             f' correct registers are created.')
         return device_node
+
+    def update_equipment(self, nid: str, dev_config: DeviceConfig | None, remote: DriverAgent | None,
+                         registry_config: list[PointConfig]) -> bool:
+        changes = False
+        dev_node = self.get_node(nid)
+        if dev_node and dev_config is not None:
+            if dev_config != dev_node.config:
+                changes = True
+                dev_node.config = dev_config
+            if remote is not None and dev_node.remote != remote:
+                dev_node.data['remote'] = remote
+                changes = True
+        existing_points = {p.identifier for p in self.points(nid)}
+        while registry_config:
+            point_config = registry_config.pop()
+            point_id = '/'.join([nid, point_config.volttron_point_name])
+            existing = self.get_node(point_id)
+            if point_id not in existing_points:
+                new_point = PointNode(config=point_config, tag=point_config.volttron_point_name,
+                                      identifier='/'.join([nid, point_config.volttron_point_name]))
+                self.add_node(new_point, parent=nid)
+                changes = True
+            elif point_config != existing.config:
+                existing.config = point_config
+                new_register = remote.interface.create_register(point_config)
+                remote.interface.insert_register(new_register, nid)
+                changes = True
+            existing_points.remove(point_id)
+        for removed in existing_points:
+            self.remove_segment(removed)
+            changes = True
+        return changes
 
     def add_segment(self, topic: str, config: EquipmentConfig = None):
         topic = topic.split('/')
@@ -310,7 +339,11 @@ class EquipmentTree(TopicTree):
         node = self.get_node(nid)
         if node.is_device:
             node.stop_device()
+        elif node.is_point():
+            self.get_remote(nid).interface.point_map.pop(nid)
         if leave_disconnected and self.has_concrete_successors(nid):
+            # TODO: This may leave behind points which have no Device. Replace Fake Driver Interface with static points?
+            #  How do we handle static points like this? What setup is required for this?  Should we do this at all?
             node.wipe_configuration()
             removed_node_count = 1
         else:

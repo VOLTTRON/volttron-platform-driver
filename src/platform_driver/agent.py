@@ -25,11 +25,12 @@
 import gevent
 import logging
 import os
+import re
 import subprocess
 import sys
 
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime
 from pkgutil import iter_modules
 from pydantic import ValidationError
 from typing import Iterable, Sequence, Set
@@ -42,7 +43,7 @@ from volttron.client.vip.agent import Agent, Core
 from volttron.client.vip.agent.subsystems.rpc import RPC
 from volttron.driver.base.driver import BaseInterface, DriverAgent
 from volttron.driver.base.driver_locks import configure_publish_lock, setup_socket_lock
-from volttron.driver.base.config import DeviceConfig, EquipmentConfig, RemoteConfig
+from volttron.driver.base.config import DeviceConfig, EquipmentConfig, PointConfig, RemoteConfig
 from volttron.driver.base.utils import publication_headers, publish_wrapper
 from volttron.utils import format_timestamp, get_aware_utc_now, load_config, setup_logging, vip_main
 from volttron.utils.jsonrpc import RemoteError
@@ -86,8 +87,9 @@ class PlatformDriverAgent(Agent):
         self.equipment_config_lock = True  # Set equipment_config_lock until after on_configure is complete.
         _log.debug('########### SETTING LOCK IN __INIT__()')
         _log.debug('########### SUBSCRIBING TO NEW AND UPDATE ON "devices/*"')
-        self.vip.config.subscribe(self.update_equipment, actions=['NEW', 'UPDATE'], pattern='devices/*')
-        self.vip.config.subscribe(self.remove_equipment, actions='DELETE', pattern='devices/*')
+        self.vip.config.subscribe(self._configure_new_equipment, actions=['NEW'], pattern='devices/*')
+        self.vip.config.subscribe(self._update_equipment, actions=['UPDATE'], pattern='devices/*')
+        self.vip.config.subscribe(self._remove_equipment, actions='DELETE', pattern='devices/*')
 
     #########################
     # Configuration & Startup
@@ -118,7 +120,6 @@ class PlatformDriverAgent(Agent):
         _log.debug("############# STARTING CONFIGURE_MAIN")
         old_config = self.config.copy()
         new_config = self._load_versioned_config(contents)
-        _log.debug(self.config)
         if action == "NEW":
             self.config = new_config
             self.equipment_tree = EquipmentTree(self)
@@ -216,49 +217,61 @@ class PlatformDriverAgent(Agent):
         _log.debug(f"########## RUNNING ON_START (REMOVING LOCK).")
         self.equipment_config_lock = False
 
-    def _configure_new_equipment(self, equipment_name: str, _, contents: dict, schedule_now: bool = True):
+    def _separate_equipment_configs(self, config_dict) -> (RemoteConfig, DeviceConfig | None, set[PointConfig]):
         # Separate remote_config and make adjustments for possible config version 1:
-        remote_config = contents.pop('remote_config', contents.pop('driver_config', {}))
-        remote_config['driver_type'] = remote_config.get('driver_type', contents.pop('driver_type', None))
+        remote_config = config_dict.pop('remote_config', config_dict.pop('driver_config', {}))
+        remote_config['driver_type'] = remote_config.get('driver_type', config_dict.pop('driver_type', None))
         # TODO: Where to put heart_beat_point? Is that remote or equipment specific?
         remote_config = RemoteConfig(**remote_config)
 
-        if self.equipment_tree.get_node(equipment_name):
-            _log.warning(f'Received a NEW configuration for equipment which already exists: {equipment_name}.'
-                         f'New configuration has been ignored.')
-            return
         if remote_config.driver_type:
             # Received new device node.
-            registry_config = contents.pop('registry_config', [])
-            dev_config = DeviceConfig(**contents)
-            try:
+            interface = self._get_configured_interface(remote_config)
+            registry_config = config_dict.pop('registry_config', [])
+            dev_config = DeviceConfig(**config_dict)
+
+            point_configs = []
+            # Set up any point nodes which are children of this device.
+            for reg in registry_config:
+                # If there are fields in device config for all registries, add them where they are not overridden:
+                for k, v in dev_config.equipment_specific_fields.items():
+                    if not reg.get(k):
+                        reg[k] = v
+                point_configs.append(interface.config_class(**reg))
+
+        else:
+            dev_config, point_configs = None, []
+        return remote_config, dev_config, point_configs
+
+    def _configure_new_equipment(self, equipment_name: str, _, contents: dict, schedule_now: bool = True) -> bool:
+        existing_node = self.equipment_tree.get_node(equipment_name)
+        if existing_node:
+            if not existing_node.config_finished:
+                existing_node.config_finished = True
+                return False
+            else:
+                return self._update_equipment(equipment_name, 'UPDATE', contents, schedule_now)
+        try:
+            remote_config, dev_config, registry_config = self._separate_equipment_configs(contents)
+            if dev_config:
+                # Received new device node.
                 driver = self._get_or_create_remote(equipment_name, remote_config, dev_config.allow_duplicate_remotes)
-            except ValueError as e:
-                _log.warning(f'Skipping configuration of equipment: {equipment_name} after encountering error --- {e}')
-                return
-            device_node = self.equipment_tree.add_device(device_topic=equipment_name, config=dev_config,
-                                                         driver_agent=driver, registry_config=registry_config)
-            driver.add_equipment(device_node)
-        else: # Received new or updated segment node.
-            equipment_config = EquipmentConfig(**contents)
-            self.equipment_tree.add_segment(equipment_name, equipment_config)
-        if schedule_now:
-            group = self.equipment_tree.get_group(equipment_name)
-            self.poll_schedulers[group].schedule()
+                device_node = self.equipment_tree.add_device(device_topic=equipment_name, dev_config=dev_config,
+                                                             driver_agent=driver, registry_config=registry_config)
+                driver.add_equipment(device_node)
+            else: # Received new or updated segment node.
+                equipment_config = EquipmentConfig(**contents)
+                self.equipment_tree.add_segment(equipment_name, equipment_config)
+            if schedule_now:
+                group = self.equipment_tree.get_group(equipment_name)
+                self.poll_schedulers[group].schedule()
+            return True
+        except ValueError as e:
+            _log.warning(f'Skipping configuration of equipment: {equipment_name} after encountering error --- {e}')
+            return False
 
     def _get_or_create_remote(self, equipment_name: str, remote_config: RemoteConfig, allow_duplicate_remotes):
-        interface = self.interface_classes.get(remote_config.driver_type)
-        if not interface:
-            try:
-                module = remote_config.module
-                interface = BaseInterface.get_interface_subclass(remote_config.driver_type, module)
-            except (AttributeError, ModuleNotFoundError, ValueError) as e:
-                raise ValueError(f'Unable to configure driver for equipment: "{equipment_name}"'
-                                 f' with interface: {remote_config.driver_type}.'
-                                 f' This interface type is currently unknown or not installed.'
-                                 f' Received exception: {e}')
-            self.interface_classes[remote_config.driver_type] = interface
-
+        interface = self._get_configured_interface(remote_config)
         allow_duplicate_remotes = True if (allow_duplicate_remotes or self.config.allow_duplicate_remotes) else False
         if not allow_duplicate_remotes:
             unique_remote_id = interface.unique_remote_id(equipment_name, remote_config)
@@ -270,29 +283,54 @@ class PlatformDriverAgent(Agent):
             driver_agent = DriverAgent(remote_config, self.equipment_tree, self. scalability_test, self.config.timezone,
                                        unique_remote_id, self.vip)
             gevent.spawn(driver_agent.core.run)
-            # TODO: Were the right number spawned? Need more debug code to ascertain this is working correctly.
             self.equipment_tree.remotes[unique_remote_id] = driver_agent
         return driver_agent
 
-    def update_equipment(self, config_name: str, action: str, contents: dict):
-        """Callback for updating equipment configuration."""
-        if self.equipment_config_lock:
-            _log.debug(f'############# {action} ACTION RAN! THE LOCK IS SET! ##############')
-            return
-        # TODO: Implement UPDATE callback for /devices.
-        _log.debug(f'############ {action} ACTION RAN! UH OH, NO LOCK!!! ##############')
-        group = self.equipment_tree.get_group(config_name)
-        poll_scheduler = self.poll_schedulers.get(group)
-        if poll_scheduler:
-            poll_scheduler.check_for_reschedule()
+    def _get_configured_interface(self, remote_config):
+        interface = self.interface_classes.get(remote_config.driver_type)
+        if not interface:
+            try:
+                module = remote_config.module
+                interface = BaseInterface.get_interface_subclass(remote_config.driver_type, module)
+            except (AttributeError, ModuleNotFoundError, ValueError) as e:
+                raise ValueError(f'Unable to configure driver with interface: {remote_config.driver_type}.'
+                                 f' This interface type is currently unknown or not installed.'
+                                 f' Received exception: {e}')
+            self.interface_classes[remote_config.driver_type] = interface
+        return interface
 
-    def remove_equipment(self, config_name: str, _, __):
+    def _update_equipment(self, config_name: str, _, contents: dict, allow_reschedule=True) -> bool:
+        """Callback for updating equipment configuration."""
+        remote_config, dev_config, registry_config = self._separate_equipment_configs(contents)
+        if dev_config:
+            try:
+                remote = self._get_or_create_remote(config_name, remote_config, dev_config.allow_duplicate_remotes)
+            except ValueError as e:
+                _log.warning(f'Skipping configuration of equipment: {config_name} after encountering error --- {e}')
+                return False
+        else:
+            remote = None
+        is_changed = self.equipment_tree.update_equipment(config_name, dev_config, remote, registry_config)
+        if allow_reschedule and is_changed:
+            poll_schedulers = []
+            for point in self.equipment_tree.points(config_name):
+                group = self.equipment_tree.get_group(point.identifier)
+                poll_schedulers.append(self.poll_schedulers.get(group))
+            for poll_scheduler in poll_schedulers:
+                poll_scheduler.check_for_reschedule()
+        return is_changed
+
+    def _remove_equipment(self, config_name: str, _, __):
         """Callback to remove equipment configuration."""
-        group = self.equipment_tree.get_group(config_name)
+        poll_schedulers = []
+        for point in self.equipment_tree.points(config_name):
+            group = self.equipment_tree.get_group(point.identifier)
+            poll_schedulers.append(self.poll_schedulers.get(group))
         self.equipment_tree.remove_segment(config_name)
         # TODO: Implement override handling.
         # self._update_override_state(config_name, 'remove')
-        self.poll_schedulers[group].check_for_reschedule()
+        for poll_scheduler in poll_schedulers:
+            poll_scheduler.check_for_reschedule()
 
     def _start_all_publishes(self):
         # TODO: Can we just schedule and let the stale property work its magic?
@@ -558,9 +596,8 @@ class PlatformDriverAgent(Agent):
         return {}
 
     @RPC.export
-    def add_node(self, node_topic: str, config: dict, update_schedule: bool = True) -> dict|None:
-        self.update_equipment(node_topic, 'NEW', contents=config, schedule_now=update_schedule)
-        # TODO: What should this return? If error_dict, how to get this?
+    def add_node(self, node_topic: str, config: dict, update_schedule: bool = True) -> bool:
+        return self._configure_new_equipment(node_topic, 'NEW', contents=config, schedule_now=update_schedule)
 
     @RPC.export
     def remove_node(self, node_topic: str, leave_disconnected: bool = False) -> bool:
