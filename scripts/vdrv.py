@@ -22,35 +22,35 @@ def topic_completer(prefix, **kwargs):
     return connection.call('list_topics', topic=topic)
 
 def driver_get_func(args):
-    result, errors = connection.call('get', topic=args.topic, tag=args.tag, regex=args.regex)
+    result, errors = connection.call('get', topic=args.topic, regex=args.regex)
     return (result, errors) if not errors and not result else result if not errors else result
 
 def driver_set_func(args):
-    result, errors = connection.call('set',  value=args.value, topic=args.topic, tag=args.tag, regex=args.regex,
+    result, errors = connection.call('set',  value=args.value, topic=args.topic, regex=args.regex,
                                      confirm_values=args.confirm_values, map_points=args.map_points)
     return (result, errors) if not errors and not result else result if not errors else result
 
 def driver_last_func(args):
-    return connection.call('last', topic=args.topic, tag=args.tag, regex=args.regex,
+    return connection.call('last', topic=args.topic, regex=args.regex,
                            value=args.value, updated=args.updated)
 
 def driver_revert_func(args):
-    return connection.call('revert', topic=args.topic, tag=args.tag, regex=args.regex)
+    return connection.call('revert', topic=args.topic, regex=args.regex)
 
 def driver_start_func(args):
-    return connection.call('start', topic=args.topic, tag=args.tag, regex=args.regex)
+    return connection.call('start', topic=args.topic, regex=args.regex)
 
 def driver_stop_func(args):
-    return connection.call('stop', topic=args.topic, tag=args.tag, regex=args.regex)
+    return connection.call('stop', topic=args.topic, regex=args.regex)
 
 def driver_enable_func(args):
-    return connection.call('enable', topic=args.topic, tag=args.tag, regex=args.regex)
+    return connection.call('enable', topic=args.topic, regex=args.regex)
 
 def driver_disable_func(args):
-    return connection.call('disable', topic=args.topic, tag=args.tag, regex=args.regex)
+    return connection.call('disable', topic=args.topic, regex=args.regex)
 
 def driver_status_func(args):
-    return connection.call('status', topic=args.topic, tag=args.tag, regex=args.regex)
+    return connection.call('status', topic=args.topic, regex=args.regex)
 
 def driver_node_add_func(args):
     if not args.config and args.config_path:
@@ -73,7 +73,7 @@ def driver_interface_remove_func(args):
     return connection.call('remove_interface', interface_name=args.name)
 
 def driver_list_topics_func(args):
-    return connection.call('list_topics', topic=args.topic, tag=args.tag, regex=args.regex)
+    return connection.call('list_topics', topic=args.topic, regex=args.regex)
 
 parser = argparse.ArgumentParser()
 subparsers = parser.add_subparsers()
