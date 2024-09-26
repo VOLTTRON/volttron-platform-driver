@@ -1402,6 +1402,16 @@ class PlatformDriverAgent(Agent):
         path, point_name = (topic, point) if point is not None else topic.rsplit('/', 1)
         return path, point_name
 
+    @RPC.export
+    def forward_bacnet_cov_value(self, remote_id, topic, point_values):
+        """
+        Called by the BACnet Proxy to pass the COV value to the driver agent
+        for publishing
+        :param remote_id: The unique addressable identifier of the remote.
+        :param topic: name of the point in the COV notification
+        :param point_values: dictionary of updated values sent by the device
+        """
+        self.equipment_tree.remotes[remote_id].publish_cov_value(topic, point_values)
 
 def main():
     """Main method called to start the agent."""
