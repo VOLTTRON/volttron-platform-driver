@@ -371,7 +371,10 @@ class EquipmentTree(TopicTree):
         return (p for p in self.find_leaves(topic_pattern, regex, exact_matches) if p.is_point)
 
     def raise_on_locks(self, node: EquipmentNode, requester: str):
-        reserved = next(self.rsearch(node.identifier, lambda n: n.reserved))
+        try:
+            reserved = next(self.rsearch(node.identifier, lambda n: n.reserved))
+        except StopIteration:
+            reserved = None
         if reserved and not node.identifier == reserved:
             raise ReservationLockError(f"Equipment {node.identifier} is reserved by another party."
                                        f" ({requester}) does not have permission to write at this time.")
