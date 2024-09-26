@@ -118,7 +118,8 @@ class PlatformDriverAgent(Agent):
 
     def configure_main(self, _, action: str, contents: dict):
         _log.debug("############# STARTING CONFIGURE_MAIN")
-        old_config = self.config.copy()
+        old_config = self.config.copy()  # TODO: On update, the old_config is a Pydantic object, not a dict.
+                                         #  Can we call load_versioned_config on it too?
         new_config = self._load_versioned_config(contents)
         if action == "NEW":
             self.config = new_config
@@ -227,6 +228,8 @@ class PlatformDriverAgent(Agent):
         if remote_config.driver_type:
             # Received new device node.
             interface = self._get_configured_interface(remote_config)
+            # Make remote_config correct subclass of RemoteConfig.
+            remote_config = interface.INTERFACE_CONFIG_CLASS(**remote_config.dict())
             registry_config = config_dict.pop('registry_config', [])
             dev_config = DeviceConfig(**config_dict)
 
@@ -237,7 +240,7 @@ class PlatformDriverAgent(Agent):
                 for k, v in dev_config.equipment_specific_fields.items():
                     if not reg.get(k):
                         reg[k] = v
-                point_configs.append(interface.config_class(**reg))
+                point_configs.append(interface.REGISTER_CONFIG_CLASS(**reg))
 
         else:
             dev_config, point_configs = None, []
