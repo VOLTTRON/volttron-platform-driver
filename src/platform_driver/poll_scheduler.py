@@ -110,7 +110,7 @@ class PollScheduler:
         seconds_from_midnight = (now - midnight)  # .total_seconds()
         offset = seconds_from_midnight % interval
         if not offset:
-            return now
+            return now + interval + group_delay
         next_from_midnight = seconds_from_midnight - offset + interval
         return midnight + next_from_midnight + group_delay
 
