@@ -34,11 +34,33 @@ class PollScheduler:
         self._schedule_polling()
 
     @classmethod
-    def setup(cls, data_model, group_configs):
+    def setup(cls, data_model: EquipmentTree, group_configs: dict[str, GroupConfig]):
         """
         Sort points from each of the remote's EquipmentNodes by interval:
             Build cls.interval_dict  as: {group: {remote: {interval: WeakSet(points)}}}}
         """
+        cls.build_interval_dict(data_model)
+        poll_schedulers = cls._create_poll_schedulers(data_model, group_configs)
+        return poll_schedulers
+
+    @classmethod
+    def _create_poll_schedulers(cls, data_model, group_configs):
+        poll_schedulers = {}
+        for i, group in enumerate(cls.interval_dicts):
+            group_config = group_configs.get(group)
+            if group_config is None:
+                # Create a config for the group with default settings and mimic the old offset multiplier behavior.
+                group_config: GroupConfig = GroupConfig()
+                group_config.start_offset = group_config.start_offset * i
+                group_configs[group] = group_config  # Add this new config back to the agent settings.
+                # TODO: Save the agent settings afterwards so this group gets the same config next time?
+            poll_scheduler_module = importlib.import_module(group_config.poll_scheduler_module)
+            poll_scheduler_class = getattr(poll_scheduler_module, group_config.poll_scheduler_class_name)
+            poll_schedulers[group] = poll_scheduler_class(data_model, group, group_config)
+        return poll_schedulers
+
+    @classmethod
+    def build_interval_dict(cls, data_model: EquipmentTree):
         for remote in data_model.remotes.values():
             interval_dict = defaultdict(lambda: defaultdict(WeakSet))
             groups = set()
@@ -52,19 +74,6 @@ class PollScheduler:
             for group in groups:
                 # TODO: Was there a reason this isn't just assigned this way three lines above?
                 cls.interval_dicts[group][remote] = interval_dict[group]
-        poll_schedulers = {}
-        for i, group in enumerate(cls.interval_dicts):
-            group_config = group_configs.get(group)
-            if group_config is None:
-                # Create a config for the group with default settings and mimic the old offset multiplier behavior.
-                group_config = GroupConfig()
-                group_config.start_offset = group_config.start_offset * i
-                group_configs[group] = group_config  # Add this new config back to the agent settings.
-                #TODO: Save the agent settings afterwards so this group gets the same config next time?
-            poll_scheduler_module = importlib.import_module(group_config.poll_scheduler_module)
-            poll_scheduler_class = getattr(poll_scheduler_module, group_config.poll_scheduler_class_name)
-            poll_schedulers[group] = poll_scheduler_class(data_model, group, group_config)
-        return poll_schedulers
 
     def _setup_publish(self, points, publish_setup=None):
         if publish_setup is None:
