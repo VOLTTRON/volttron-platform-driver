@@ -3,10 +3,9 @@ import sys
 
 from datetime import datetime
 
-from volttron.utils.logs import setup_logging
 from volttron.utils.math_utils import mean, stdev
 
-setup_logging()
+
 _log = logging.getLogger(__name__)
 
 

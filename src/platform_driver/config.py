@@ -1,6 +1,9 @@
+import logging
 from datetime import timedelta
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+
+_log = logging.getLogger()
 
 class GroupConfig(BaseModel):
     minimum_polling_interval: float = 1.0

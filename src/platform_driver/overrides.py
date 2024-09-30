@@ -4,10 +4,10 @@ import logging
 from datetime import timedelta
 
 from volttron.driver.base.interfaces import DriverInterfaceError
-from volttron.utils import format_timestamp, get_aware_utc_now, parse_timestamp_string, setup_logging
+from volttron.utils import format_timestamp, get_aware_utc_now, parse_timestamp_string
 from volttron.utils.jsonapi import dumps, loads
 
-setup_logging()
+
 _log = logging.getLogger(__name__)
 
 

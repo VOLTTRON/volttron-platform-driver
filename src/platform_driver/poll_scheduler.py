@@ -9,12 +9,12 @@ from math import floor, gcd, lcm
 from weakref import WeakKeyDictionary, WeakValueDictionary, WeakSet
 
 from volttron.client.vip.agent.core import ScheduledEvent
-from volttron.utils import get_aware_utc_now, setup_logging
+from volttron.utils import get_aware_utc_now
 
 from .config import GroupConfig
 from .equipment import EquipmentTree
 
-setup_logging()
+
 _log = logging.getLogger(__name__)
 
 

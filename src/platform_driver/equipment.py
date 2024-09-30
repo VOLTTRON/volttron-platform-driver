@@ -10,12 +10,12 @@ from volttron.client.known_identities import CONFIGURATION_STORE
 from volttron.driver.base.driver import DriverAgent
 from volttron.driver.base.config import DataSource, DeviceConfig, EquipmentConfig, PointConfig
 from volttron.lib.topic_tree import TopicNode, TopicTree
-from volttron.utils import get_aware_utc_now, parse_json_config, setup_logging
+from volttron.utils import get_aware_utc_now, parse_json_config
 
 from .overrides import OverrideError
 from .reservations import ReservationLockError
 
-setup_logging()
+
 _log = logging.getLogger(__name__)
 
 
