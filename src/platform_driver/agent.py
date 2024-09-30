@@ -986,15 +986,18 @@ class PlatformDriverAgent(Agent):
                        ' Please consider converting code to use revert() method.')
             path = args[0]
 
-        node = self.equipment_tree.get_node(self._equipment_id(path, None))
-        if not node:
-            raise ValueError(f'No equipment found for topic: {path}')
-        self.equipment_tree.raise_on_locks(node, sender)
-        remote = self.equipment_tree.get_remote(node.identifier)
-        remote.revert_all(**kwargs)
+        self.revert(self._equipment_id(path, None))
+
+        # TODO: Confirm that reverting through revert() works, then delete the commented block.
+        # node = self.equipment_tree.get_node(self._equipment_id(path, None))
+        # if not node:
+        #     raise ValueError(f'No equipment found for topic: {path}')
+        # self.equipment_tree.raise_on_locks(node, sender)
+        # remote = self.equipment_tree.get_remote(node.identifier)
+        # remote.revert_all(**kwargs)
 
         headers = self._get_headers(sender)
-        self._push_result_topic_pair(REVERT_DEVICE_RESPONSE_PREFIX, topic, headers, None)
+        self._push_result_topic_pair(REVERT_DEVICE_RESPONSE_PREFIX, path, headers, None)
 
 
     @RPC.export
