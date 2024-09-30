@@ -421,7 +421,7 @@ class EquipmentTree(TopicTree):
         return self[next(self.rsearch(nid, lambda n: n.publish_all_breadth is not None))].publish_all_breadth
 
     def is_active(self, nid: str) -> bool:
-        return any(p.active for p in self.points(nid))
+        return self[next(self.rsearch(nid, lambda n: n.active is not None))].active
 
     def is_ready(self, nid: str) -> bool:
         return not any(p.last_updated is None for p in self.points(nid))
