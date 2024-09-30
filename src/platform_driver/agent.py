@@ -49,7 +49,7 @@ from volttron.utils import format_timestamp, get_aware_utc_now, load_config, set
 from volttron.utils.jsonrpc import RemoteError
 from volttron.utils.scheduling import periodic
 
-from .config import latest_config_version, PlatformDriverConfig, PlatformDriverConfigV1, PlatformDriverConfigV2
+from .config import PlatformDriverConfig
 from .constants import *
 from .equipment import EquipmentTree, PointNode
 from .overrides import OverrideManager
@@ -67,7 +67,7 @@ class PlatformDriverAgent(Agent):
     def __init__(self, **kwargs):
         config_path = kwargs.pop('config_path', None)
         super(PlatformDriverAgent, self).__init__(**kwargs)
-        self.config: PlatformDriverConfig = self._load_versioned_config(load_config(config_path) if config_path else {})
+        self.config: PlatformDriverConfig = self._load_agent_config(**load_config(config_path) if config_path else {})
 
         # Initialize internal data structures:
         self.equipment_tree = EquipmentTree(self)
@@ -83,10 +83,6 @@ class PlatformDriverAgent(Agent):
 
         self.vip.config.set_default("config", self.config.dict())
         self.vip.config.subscribe(self.configure_main, actions=['NEW', 'UPDATE', 'DELETE'], pattern='config')
-
-        self.equipment_config_lock = True  # Set equipment_config_lock until after on_configure is complete.
-        _log.debug('########### SETTING LOCK IN __INIT__()')
-        _log.debug('########### SUBSCRIBING TO NEW AND UPDATE ON "devices/*"')
         self.vip.config.subscribe(self._configure_new_equipment, actions=['NEW'], pattern='devices/*')
         self.vip.config.subscribe(self._update_equipment, actions=['UPDATE'], pattern='devices/*')
         self.vip.config.subscribe(self._remove_equipment, actions='DELETE', pattern='devices/*')
@@ -95,32 +91,18 @@ class PlatformDriverAgent(Agent):
     # Configuration & Startup
     #########################
 
-    def _load_versioned_config(self, config: dict):
-        if not config: # There is no configuration yet, just loading defaults. No need to warn about versions.
-            return PlatformDriverConfigV1()
-        config_version = config.get('config_version', 1)
+    def _load_agent_config(self, config: dict):
         try:
-            if config_version < latest_config_version:
-                _log.warning(f'Deprecation Warning: Platform Driver Agent has been configured with an agent'
-                             f' configuration which is either unversioned or less than {latest_config_version}.'
-                             f' Please see readthedocs for information regarding update of configuration style'
-                             f' to a version {latest_config_version}. Support for'
-                             f' configuration version style {config_version} may be removed in a future release.')
-                return PlatformDriverConfigV1(**config)
-            else:
-                return PlatformDriverConfigV2(**config)
+            return PlatformDriverConfig(**config)
         except ValidationError as e:
-            _log.warning(f'Validation of platform driver configuration file failed. Using default values.'
-                         f' Errors: {str(e)}')
+            _log.warning(f'Validation of platform driver configuration file failed. Using default values. --- {str(e)}')
             if self.core.connected:  # TODO: Is this a valid way to make sure we are ready to call subsystems?
-                self.vip.health.set_status(STATUS_BAD, "Error processing configuration: {e}")
-            return PlatformDriverConfigV2()
+                self.vip.health.set_status(STATUS_BAD, f'Error processing configuration: {e}')
+            return PlatformDriverConfig()
 
     def configure_main(self, _, action: str, contents: dict):
-        _log.debug("############# STARTING CONFIGURE_MAIN")
-        old_config = self.config.copy()  # TODO: On update, the old_config is a Pydantic object, not a dict.
-                                         #  Can we call load_versioned_config on it too?
-        new_config = self._load_versioned_config(contents)
+        old_config = self.config.copy()
+        new_config = self._load_agent_config(contents)
         if action == "NEW":
             self.config = new_config
             self.equipment_tree = EquipmentTree(self)
@@ -209,14 +191,6 @@ class PlatformDriverAgent(Agent):
 
         # Set up All Publishes:
         self._start_all_publishes()
-        _log.debug("############ ENDING CONFIGURE_MAIN")
-
-    @Core.receiver('onstart')
-    def on_start(self, _):
-        # Remove the equipment_config_lock after the on configure event has completed. Initial configuration of all
-        #  equipment should be complete. We can now allow update events to run.
-        _log.debug(f"########## RUNNING ON_START (REMOVING LOCK).")
-        self.equipment_config_lock = False
 
     def _separate_equipment_configs(self, config_dict) -> (RemoteConfig, DeviceConfig | None, set[PointConfig]):
         # Separate remote_config and make adjustments for possible config version 1:

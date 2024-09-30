@@ -2,8 +2,6 @@ from datetime import timedelta
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-latest_config_version = 2
-
 class GroupConfig(BaseModel):
     minimum_polling_interval: float = 1.0
     start_offset: timedelta = timedelta(seconds=0.0)
@@ -12,17 +10,16 @@ class GroupConfig(BaseModel):
     poll_scheduler_configs: BaseModel | None = None
     parallel_subgroups: bool = False
 
-    @classmethod
     @field_validator('start_offset', mode='before')
+    @classmethod
     def _make_start_offset(cls, v):
         return timedelta(seconds=v)
 
 
 class PlatformDriverConfig(BaseModel):
     model_config = ConfigDict(validate_assignment=True, populate_by_name=True)
-    config_version: int = latest_config_version
     allow_duplicate_remotes: bool = False
-    allow_no_lock_write: bool = False  # TODO: Alias with "require_reservation_to_write"?
+    allow_no_lock_write: bool = True  # Deprecated.
     allow_reschedule: bool = True
     # TODO: Is there a better default for breadth_first_base besides "devices" or "points",
     #  since point names are still keys in the dict? Maybe just "breadth" or something?
@@ -40,7 +37,9 @@ class PlatformDriverConfig(BaseModel):
     poll_scheduler_module: str = 'platform_driver.poll_scheduler'
     publish_single_depth: bool = Field(default=False, alias='publish_depth_first_single')
     publish_single_breadth: bool = Field(default=False, alias='publish_breadth_first_single')
+    publish_all_depth: bool = Field(default=False, alias='publish_depth_first_all')
     publish_all_breadth: bool = Field(default=False, alias='publish_breadth_first_all')
+    publish_multi_depth: bool = Field(default=True, alias='publish_depth_first_multi')
     publish_multi_breadth: bool = Field(default=False, alias='publish_breadth_first_multi')
     remote_heartbeat_interval: float = 60.0
     reservation_preempt_grace_time: float = 60.0
@@ -48,7 +47,7 @@ class PlatformDriverConfig(BaseModel):
     reservation_required_for_write: bool = False
     scalability_test: bool = False
     scalability_test_iterations: int = 3
-    timezone: str = 'UTC'  # TODO: This needs integration (is is currently used in creating register metadata). The
+    timezone: str = 'UTC'  # TODO: Timezone needs integration (is is currently used in creating register metadata). The
                            #  driver has traditionally configured timezones at the device level, but these are not used
                            #  to create the timestamps that accompany them. They should really match
                            #  and (at least by default?) be global.
@@ -63,15 +62,7 @@ class PlatformDriverConfig(BaseModel):
                 start_offset=self.group_offset_interval,
                 parallel_subgroups=True
             )
+        # Require reservation if either reservation_required_for write is True or allow_no_lock_writes is False:
+        self.reservation_required_for_write = True if (self.reservation_required_for_write
+                                                       or not self.allow_no_lock_write) else False
         return self
-
-class PlatformDriverConfigV2(PlatformDriverConfig):
-    config_version: int = 2
-    publish_all_depth: bool = Field(default=False, alias='publish_depth_first_all')
-    publish_multi_depth: bool = Field(default=True, alias='publish_depth_first_multi')
-
-
-class PlatformDriverConfigV1(PlatformDriverConfig):
-    config_version: int = 1
-    publish_all_depth: bool = Field(default=True, alias='publish_depth_first_all')
-    publish_multi_depth: bool = Field(default=False, alias='publish_depth_first_multi')
