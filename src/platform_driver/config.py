@@ -1,22 +1,28 @@
 import logging
 from datetime import timedelta
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, computed_field, ConfigDict, Field, field_validator, model_validator
+
+import logging
 
 
 _log = logging.getLogger()
 
 class GroupConfig(BaseModel):
+    model_config = ConfigDict(validate_assignment=True, populate_by_name=True)
     minimum_polling_interval: float = 1.0
-    start_offset: timedelta = timedelta(seconds=0.0)
+    start_offset_seconds: float = Field(default=0.0, alias='start_offset')
     poll_scheduler_class_name: str = 'StaticCyclicPollScheduler'
     poll_scheduler_module: str = 'platform_driver.poll_scheduler'
     poll_scheduler_configs: BaseModel | None = None
     parallel_subgroups: bool = False
 
-    @field_validator('start_offset', mode='before')
-    @classmethod
-    def _make_start_offset(cls, v):
-        return timedelta(seconds=v)
+    @property
+    def start_offset(self) -> timedelta:
+        return timedelta(seconds=self.start_offset_seconds)
+
+    @start_offset.setter
+    def start_offset(self, v):
+        self.start_offset_seconds = v.total_seconds() if isinstance(v, timedelta) else v
 
 
 class PlatformDriverConfig(BaseModel):
@@ -47,13 +53,19 @@ class PlatformDriverConfig(BaseModel):
     remote_heartbeat_interval: float = 60.0
     reservation_preempt_grace_time: float = 60.0
     reservation_publish_interval: float = 60.0
-    reservation_required_for_write: bool = False
+    reservation_required_for_write_configured: bool = Field(default=False, alias='reservation_required_for_write')
     scalability_test: bool = False
     scalability_test_iterations: int = 3
     timezone: str = 'UTC'  # TODO: Timezone needs integration (is is currently used in creating register metadata). The
                            #  driver has traditionally configured timezones at the device level, but these are not used
                            #  to create the timestamps that accompany them. They should really match
                            #  and (at least by default?) be global.
+
+    @computed_field
+    @property
+    def reservation_required_for_write(self) -> bool:
+        # Require reservation if either reservation_required_for write is True or allow_no_lock_writes is False:
+        return True if self.reservation_required_for_write_configured or not self.allow_no_lock_write else False
 
     @model_validator(mode='after')
     def _set_default_group(self):
@@ -65,7 +77,4 @@ class PlatformDriverConfig(BaseModel):
                 start_offset=self.group_offset_interval,
                 parallel_subgroups=True
             )
-        # Require reservation if either reservation_required_for write is True or allow_no_lock_writes is False:
-        self.reservation_required_for_write = True if (self.reservation_required_for_write
-                                                       or not self.allow_no_lock_write) else False
         return self

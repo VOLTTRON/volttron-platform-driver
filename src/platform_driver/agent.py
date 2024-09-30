@@ -40,7 +40,7 @@ from volttron.client.known_identities import PLATFORM_DRIVER
 from volttron.client.logs import setup_logging
 from volttron.client.messaging.health import STATUS_BAD
 from volttron.client.messaging.utils import normtopic
-from volttron.client.vip.agent import Agent, Core
+from volttron.client.vip.agent import Agent
 from volttron.client.vip.agent.subsystems.rpc import RPC
 from volttron.driver.base.driver import BaseInterface, DriverAgent
 from volttron.driver.base.driver_locks import configure_publish_lock, setup_socket_lock
@@ -68,8 +68,7 @@ class PlatformDriverAgent(Agent):
     def __init__(self, **kwargs):
         config_path = kwargs.pop('config_path', None)
         super(PlatformDriverAgent, self).__init__(**kwargs)
-        self.config: PlatformDriverConfig = self._load_agent_config(**load_config(config_path) if config_path else {})
-
+        self.config: PlatformDriverConfig = self._load_agent_config(load_config(config_path) if config_path else {})
         # Initialize internal data structures:
         self.equipment_tree = EquipmentTree(self)
         self.interface_classes = {}
