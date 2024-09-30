@@ -24,7 +24,7 @@
 
 import gevent
 import logging
-import os
+# import os  # TODO: Used in commented add_interface.
 import re
 import subprocess
 import sys
@@ -35,7 +35,7 @@ from pkgutil import iter_modules
 from pydantic import ValidationError
 from typing import Iterable, Sequence, Set
 
-from volttron.client.commands.install_agents import InstallRuntimeError
+# from volttron.client.commands.install_agents import InstallRuntimeError # TODO Used in commented add_interface.
 from volttron.client.known_identities import PLATFORM_DRIVER
 from volttron.client.messaging.health import STATUS_BAD
 from volttron.client.messaging.utils import normtopic
@@ -582,17 +582,18 @@ class PlatformDriverAgent(Agent):
 
     @RPC.export
     def add_interface(self, interface_name: str, local_path: str = None) -> bool:
-        ### ADAPTED FROM volttron.client.install_agents.install_agent_vctl
-        if os.path.isdir(interface_name):
-            pass # TODO: Install from directory (see install_agent_directory in volttron.client.install_agents.py)
-        elif interface_name.endswith(".whl") and not os.path.isfile(interface_name):
-            raise InstallRuntimeError(f"Invalid wheel file {interface_name}")
-            # TODO: Seems like there should be another elif after this.
-        else:
-            interface_package = self._interface_package_from_short_name(interface_name)
-            sp_result = subprocess.run([sys.executable, '-m', 'pip', 'install', interface_package])
-        # TODO: What should this be returning?  If error_dict, how to get this?s
-        return False if sp_result.returncode else True
+        raise NotImplementedError('add_interface is not yet implemented.')
+        # ### ADAPTED FROM volttron.client.install_agents.install_agent_vctl
+        # if os.path.isdir(interface_name):
+        #     pass # TODO: Install from directory (see install_agent_directory in volttron.client.install_agents.py)
+        # elif interface_name.endswith(".whl") and not os.path.isfile(interface_name):
+        #     raise InstallRuntimeError(f"Invalid wheel file {interface_name}")
+        #     # TODO: Seems like there should be another elif after this.
+        # else:
+        #     interface_package = self._interface_package_from_short_name(interface_name)
+        #     sp_result = subprocess.run([sys.executable, '-m', 'pip', 'install', interface_package])
+        # # TODO: What should this be returning?  If error_dict, how to get this?s
+        # return False if sp_result.returncode else True
 
     @RPC.export
     def list_interfaces(self) -> list[str]:
@@ -643,9 +644,10 @@ class PlatformDriverAgent(Agent):
         :param requests: A list of time slot requests in the format
         described in `Device Schedule`_.
         """
-        rpc_peer = self.vip.rpc.context.vip_message.peer
-        # TODO: Is new_reservation the same as new_task?
-        return self.reservation_manager.new_reservation(rpc_peer, task_id, priority, requests, publish_result=False)
+        raise NotImplementedError('new_reservation is not yet implemented.')
+        # rpc_peer = self.vip.rpc.context.vip_message.peer
+        # # TODO: Is new_reservation the same as new_task?
+        # return self.reservation_manager.new_reservation(rpc_peer, task_id, priority, requests, publish_result=False)
 
     @RPC.export
     def cancel_reservation(self, task_id: str) -> dict|None:
@@ -653,9 +655,10 @@ class PlatformDriverAgent(Agent):
         Requests the cancellation of the specified task id.
         :param task_id: Task name.
         """
-        rpc_peer = self.vip.rpc.context.vip_message.peer
-        # TODO: Is cancel_reservation the same as new_task?
-        return self.reservation_manager.cancel_reservation(rpc_peer, task_id, publish_result=False)
+        raise NotImplementedError('cancel_reservation is not yet implemented.')
+        # rpc_peer = self.vip.rpc.context.vip_message.peer
+        # # TODO: Is cancel_reservation the same as new_task?
+        # return self.reservation_manager.cancel_reservation(rpc_peer, task_id, publish_result=False)
 
     #----------
     # Overrides
@@ -681,7 +684,8 @@ class PlatformDriverAgent(Agent):
         :param staggered_revert: If this flag is set, reverting of devices will be staggered.
         :type staggered_revert: boolean
         """
-        self.override_manager.set_on(pattern, duration, failsafe_revert, staggered_revert)
+        raise NotImplementedError(' is not yet implemented.')
+        # self.override_manager.set_on(pattern, duration, failsafe_revert, staggered_revert)
 
     @RPC.export
     def set_override_off(self, pattern: str):
@@ -692,7 +696,8 @@ class PlatformDriverAgent(Agent):
         :param pattern: Pattern on which override condition has to be removed.
         :type pattern: str
         """
-        return self.override_manager.set_off(pattern)
+        raise NotImplementedError(' is not yet implemented.')
+        # return self.override_manager.set_off(pattern)
 
     # Get a list of all the devices with override condition.
     @RPC.export
@@ -701,7 +706,8 @@ class PlatformDriverAgent(Agent):
 
         Get a list of all the devices with override condition.
         """
-        return list(self.override_manager.devices)
+        raise NotImplementedError(' is not yet implemented.')
+        # return list(self.override_manager.devices)
 
     @RPC.export
     def clear_overrides(self):
@@ -709,7 +715,8 @@ class PlatformDriverAgent(Agent):
 
         Clear all overrides.
         """
-        self.override_manager.clear()
+        raise NotImplementedError(' is not yet implemented.')
+        # self.override_manager.clear()
 
     @RPC.export
     def get_override_patterns(self):
@@ -717,7 +724,8 @@ class PlatformDriverAgent(Agent):
 
         Get a list of all the override patterns.
         """
-        return list(self.override_manager.patterns)
+        raise NotImplementedError(' is not yet implemented.')
+        # return list(self.override_manager.patterns)
 
     #-------------------
     # Legacy RPC Methods
@@ -789,7 +797,7 @@ class PlatformDriverAgent(Agent):
             path = topic
         elif path == sender or len(args) > 0:
             # Function was likely called with actuator-style positional arguments. Reassign variables to match.
-            _log.debug('Deprecated actuator-style positional arguments detected in set_point().'
+            _log.info('Deprecated actuator-style positional arguments detected in set_point().'
                        ' Please consider converting code to use set() method.')
             path, point_name = (point_name, args[0]) if len(args) >= 1 else point_name, None
         point_name = point_name if point_name else kwargs.get('point', None)
@@ -817,6 +825,8 @@ class PlatformDriverAgent(Agent):
         :param topic: Device topic
         :returns: Dictionary of points to values
         """
+        _log.info('Call to deprecated RPC method "scrape_all". This method has been superseded by the "get" method'
+                  ' and will be removed in a future version. Please update to the newer method.')
         path = self._equipment_id(topic, None)
         return self.get(topic=path)
 
@@ -938,7 +948,7 @@ class PlatformDriverAgent(Agent):
             path, point_name = topic, None
         elif path == sender:
             # Function was likely called with actuator-style positional arguments. Reassign variables to match.
-            _log.debug('Deprecated actuator-style positional arguments detected in revert_point().'
+            _log.info('Deprecated actuator-style positional arguments detected in revert_point().'
                        ' Please consider converting code to use revert() method.')
             path, point_name = point_name, None
 
@@ -972,7 +982,7 @@ class PlatformDriverAgent(Agent):
             path = topic
         elif path == sender and len(args) > 0:
             # Function was likely called with actuator-style positional arguments. Reassign variables to match.
-            _log.debug('Deprecated actuator-style positional arguments detected in revert_device().'
+            _log.info('Deprecated actuator-style positional arguments detected in revert_device().'
                        ' Please consider converting code to use revert() method.')
             path = args[0]
 
@@ -1012,7 +1022,7 @@ class PlatformDriverAgent(Agent):
 
             The return values are described in `New Task Response`_.
         """
-        _log.debug('Call to deprecated RPC method "request_new_schedule. '
+        _log.info('Call to deprecated RPC method "request_new_schedule. '
                    'This method provides compatability with the actuator API, but has been superseded '
                    'by "new_reservation". Please update to the newer method.')
         rpc_peer = self.vip.rpc.context.vip_message.peer
@@ -1037,7 +1047,7 @@ class PlatformDriverAgent(Agent):
         The return values are described in `Cancel Task Response`_.
 
         """
-        _log.debug('Call to deprecated RPC method "request_cancel_schedule. '
+        _log.info('Call to deprecated RPC method "request_cancel_schedule. '
                    'This method provides compatability with the actuator API, but has been superseded '
                    'by "cancel_reservation". Please update to the newer method.')
         rpc_peer = self.vip.rpc.context.vip_message.peer
