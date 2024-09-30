@@ -217,6 +217,7 @@ class EquipmentTree(TopicTree):
         self.remotes = WeakValueDictionary()
 
         root_config = self[self.root].data['config']
+        root_config.active = True
         root_config.group = 'default'
         root_config.polling_interval = agent.config.default_polling_interval
         root_config.publish_single_depth = agent.config.publish_single_depth
