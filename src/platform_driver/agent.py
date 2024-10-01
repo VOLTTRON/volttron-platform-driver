@@ -257,9 +257,8 @@ class PlatformDriverAgent(Agent):
 
         driver_agent = self.equipment_tree.remotes.get(unique_remote_id)
         if not driver_agent:
-            driver_agent = DriverAgent(remote_config, self.equipment_tree, self. scalability_test, self.config.timezone,
-                                       unique_remote_id, self.vip)
-            gevent.spawn(driver_agent.core.run)
+            driver_agent = DriverAgent(remote_config, self.core, self.equipment_tree, self.scalability_test,
+                                       self.config.timezone, unique_remote_id, self.vip)
             self.equipment_tree.remotes[unique_remote_id] = driver_agent
         return driver_agent
 
