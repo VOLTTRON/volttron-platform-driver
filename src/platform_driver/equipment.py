@@ -233,7 +233,7 @@ class EquipmentTree(TopicTree):
         #   and is not returned by the self.config.get() method ( it is dereferenced, already).
         remote_conf = {}
         try:
-            remote_conf_json = self.agent.vip.rpc.call(CONFIGURATION_STORE, 'manage_get',self.agent.core.identity,
+            remote_conf_json = self.agent.vip.rpc.call(CONFIGURATION_STORE, 'get_config',self.agent.core.identity,
                                                         nid).get(timeout=5)
             remote_conf = parse_json_config(remote_conf_json)
         except (Exception, gevent.Timeout) as e:
