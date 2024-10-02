@@ -81,7 +81,7 @@ class PlatformDriverAgent(Agent):
         self.reservation_manager = None  # TODO: Should this use a default reservation manager?
         self.scalability_test = None
 
-        self.vip.config.set_default("config", self.config.dict())
+        self.vip.config.set_default("config", self.config.model_dump())
         self.vip.config.subscribe(self.configure_main, actions=['NEW', 'UPDATE', 'DELETE'], pattern='config')
         self.vip.config.subscribe(self._configure_new_equipment, actions=['NEW'], pattern='devices/*')
         self.vip.config.subscribe(self._update_equipment, actions=['UPDATE'], pattern='devices/*')
@@ -203,7 +203,7 @@ class PlatformDriverAgent(Agent):
             # Received new device node.
             interface = self._get_configured_interface(remote_config)
             # Make remote_config correct subclass of RemoteConfig.
-            remote_config = interface.INTERFACE_CONFIG_CLASS(**remote_config.dict())
+            remote_config = interface.INTERFACE_CONFIG_CLASS(**remote_config.model_dump())
             registry_config = config_dict.pop('registry_config', [])
             dev_config = DeviceConfig(**config_dict)
 
