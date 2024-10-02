@@ -53,7 +53,6 @@ isort = "^5.10.1"
 safety = "^1.10.3"
 mypy = "^0.942"
 coverage = "^6.3.2"
-volttron-testing = "^0.4.1rc3"
 
 [tool.poetry.group.documentation.dependencies]
 Sphinx = "^4.5.0"

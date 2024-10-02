@@ -386,10 +386,10 @@ class PlatformDriverAgent(Agent):
             for topic, val in q_return_values.items():
                 node = self.equipment_tree.get_node(topic)
                 if node:
-                    node.last_value(val)
+                    node.last_value = val
             results.update(q_return_values)
             errors.update(q_return_errors)
-            return results, errors
+        return results, errors
 
     @RPC.export
     def set(self, value: any, topic: str | Sequence[str] | Set[str] = None, regex: str = None,
