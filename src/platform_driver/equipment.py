@@ -239,7 +239,8 @@ class EquipmentTree(TopicTree):
         except (Exception, gevent.Timeout) as e:
             _log.warning(f'Unable to get registry_name for device: {nid} -- {e}')
         finally:
-            return remote_conf.get('registry_config')
+            reg_name = remote_conf.get('registry_config', '')
+            return reg_name[len('config://'):] if len(reg_name) >= len('config://') else None
 
     def add_device(self, device_topic: str, dev_config: DeviceConfig, driver_agent: DriverAgent,
                    registry_config: list[PointConfig]):
@@ -431,7 +432,7 @@ class EquipmentTree(TopicTree):
         return any(p.stale for p in self.points(nid))
 
     def update_stored_registry_config(self, nid: str):
-        device_node = self.equipment_tree.get_device_node(nid)
-        registry = [p.config for p in self.points(device_node.nid)]
+        device_node = self.get_device_node(nid)
+        registry = [p.config.model_dump() for p in self.points(device_node.identifier)]
         if device_node.registry_name:
             self.agent.vip.config.set(device_node.registry_name, registry)
