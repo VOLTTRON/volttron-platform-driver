@@ -813,8 +813,8 @@ class PlatformDriverAgent(Agent):
             raise ValueError(f'No remote found for topic: {point_name}')
         result = remote.set_point(point_name, value, **kwargs)
         headers = self._get_headers(sender)
-        self._push_result_topic_pair(WRITE_ATTEMPT_PREFIX, topic, headers, value)
-        self._push_result_topic_pair(VALUE_RESPONSE_PREFIX, topic, headers, result)
+        self._push_result_topic_pair(WRITE_ATTEMPT_PREFIX, point_name, headers, value)
+        self._push_result_topic_pair(VALUE_RESPONSE_PREFIX, point_name, headers, result)
         return result
 
     @RPC.export
