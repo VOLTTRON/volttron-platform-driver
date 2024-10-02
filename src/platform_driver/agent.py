@@ -404,7 +404,8 @@ class PlatformDriverAgent(Agent):
         return self._set(value, query_plan, confirm_values)
 
     @staticmethod
-    def _set(value: any, query_plan: dict[DriverAgent, Set[PointNode]], confirm_values: bool, map_points=False):
+    def _set(value: any, query_plan: dict[DriverAgent, Set[PointNode]], confirm_values: bool, map_points=False
+             ) -> (dict, dict):
         """Set selected points on each remote"""
         results, errors = {}, {}
         for (remote, point_set) in query_plan.items():
@@ -414,6 +415,7 @@ class PlatformDriverAgent(Agent):
             if confirm_values:
                 # TODO: Should results contain the values read back from the device, or Booleans for success?
                 results.update(remote.get_multiple_points([p.identifier for p in point_set]))
+        return results, errors
 
     @RPC.export
     def revert(self, topic: str | Sequence[str] | Set[str] = None, regex: str = None) -> dict[str, str]:
