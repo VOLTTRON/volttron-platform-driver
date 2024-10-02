@@ -130,8 +130,7 @@ class TopicTree(Tree):
                 return [l.identifier for n in nids for l in self.leaves(n)]
 
         regex = re.compile(regex) if regex else None
-        topic_parts = [part.strip('/') for part in topic_pattern.split('/-') if part != '']
-        topic_nids = clipping(topic_parts)
+        topic_nids = clipping([part.strip('/') for part in topic_pattern.split('/-') if part != '']) if topic_pattern else []
         if topic_nids and exact_matches:
             nodes = (self.get_node(n) for n in topic_nids if n in exact_matches and (not regex or regex.search(n)))
         elif topic_nids and not exact_matches:
