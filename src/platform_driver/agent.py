@@ -356,7 +356,7 @@ class PlatformDriverAgent(Agent):
     def build_query_plan(self, topic: str | Sequence[str] | Set[str] = None,
                          regex: str = None) -> dict[DriverAgent, Set[PointNode]]:
         """ Find points to be queried and organize by remote."""
-        exact_matches, topic = (topic, None) if isinstance(topic, list) else ([], topic)
+        exact_matches, topic = (topic, None) if isinstance(topic, list) or isinstance(topic, set) else ([], topic)
         query_plan = defaultdict(set)
         for p in self.equipment_tree.find_points(topic, regex, exact_matches):
             query_plan[self.equipment_tree.get_remote(p.identifier)].add(p)
