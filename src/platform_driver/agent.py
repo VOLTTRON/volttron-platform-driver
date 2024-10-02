@@ -962,7 +962,7 @@ class PlatformDriverAgent(Agent):
         remote.revert_point(equip_id, **kwargs)
 
         headers = self._get_headers(sender)
-        self._push_result_topic_pair(REVERT_POINT_RESPONSE_PREFIX, topic, headers, None)
+        self._push_result_topic_pair(REVERT_POINT_RESPONSE_PREFIX, equip_id, headers, None)
 
     @RPC.export
     def revert_device(self, path: str, *args, **kwargs):
