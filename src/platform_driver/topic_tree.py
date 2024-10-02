@@ -138,7 +138,7 @@ class TopicTree(Tree):
         elif not topic_nids and exact_matches:
             nodes = (self.get_node(n) for n in exact_matches if (not regex or regex.search(n)) and self.contains(n))
         else:
-            nodes = self.filter_nodes(lambda n: regex.search(n.identifier)) if regex else self.all_nodes_itr()
+            nodes = self.filter_nodes(lambda n: regex.search(n.identifier)) if regex else [] # TODO: Why was this here? --- else self.all_nodes_itr()
         return nodes
 
     def prune(self, topic_pattern: str = None, regex: str = None, exact_matches: Iterable = None, *args, **kwargs):
