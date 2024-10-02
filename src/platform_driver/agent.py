@@ -1055,7 +1055,7 @@ class PlatformDriverAgent(Agent):
                    'This method provides compatability with the actuator API, but has been superseded '
                    'by "cancel_reservation". Please update to the newer method.')
         rpc_peer = self.vip.rpc.context.vip_message.peer
-        return self.reservation_manager.cancel_reservation(rpc_peer, task_id, publish_result=False)
+        return self.reservation_manager.cancel_task(rpc_peer, task_id)  #, publish_result=False)
 
     ##################
     # PubSub Interface
