@@ -951,13 +951,13 @@ class PlatformDriverAgent(Agent):
                        ' Please consider converting code to use revert() method.')
             path, point_name = point_name, None
 
-        point_name = self._equipment_id(path, point_name)
-        node = self.equipment_tree.get_node(self._equipment_id(path, point_name))
+        equip_id = self._equipment_id(path, point_name)
+        node = self.equipment_tree.get_node(equip_id)
         if not node:
-            raise ValueError(f'No equipment found for topic: {point_name}')
+            raise ValueError(f'No equipment found for topic: {equip_id}')
         self.equipment_tree.raise_on_locks(node, sender)
         remote = self.equipment_tree.get_remote(node.identifier)
-        remote.revert_point(point_name, **kwargs)
+        remote.revert_point(equip_id, **kwargs)
 
         headers = self._get_headers(sender)
         self._push_result_topic_pair(REVERT_POINT_RESPONSE_PREFIX, topic, headers, None)
