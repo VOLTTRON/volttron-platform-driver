@@ -811,17 +811,20 @@ class PlatformDriverAgent(Agent):
         point_name = point_name if point_name else kwargs.get('point', None)
 
         point_name = self._equipment_id(path, point_name)
-        node = self.equipment_tree.get_node(point_name)
+        return self._set_point(point_name, value, sender, **kwargs)
+
+    def _set_point(self, topic, value, sender, **kwargs):
+        node = self.equipment_tree.get_node(topic)
         if not node:
-            raise ValueError(f'No equipment found for topic: {point_name}')
+            raise ValueError(f'No equipment found for topic: {topic}')
         self.equipment_tree.raise_on_locks(node, sender)
         remote = self.equipment_tree.get_remote(node.identifier)
         if not remote:
-            raise ValueError(f'No remote found for topic: {point_name}')
-        result = remote.set_point(point_name, value, **kwargs)
+            raise ValueError(f'No remote found for topic: {topic}')
+        result = remote.set_point(topic, value, **kwargs)
         headers = self._get_headers(sender)
-        self._push_result_topic_pair(WRITE_ATTEMPT_PREFIX, point_name, headers, value)
-        self._push_result_topic_pair(VALUE_RESPONSE_PREFIX, point_name, headers, result)
+        self._push_result_topic_pair(WRITE_ATTEMPT_PREFIX, topic, headers, value)
+        self._push_result_topic_pair(VALUE_RESPONSE_PREFIX, topic, headers, result)
         return result
 
     @RPC.export
@@ -996,14 +999,6 @@ class PlatformDriverAgent(Agent):
 
         self.revert(self._equipment_id(path, None))
 
-        # TODO: Confirm that reverting through revert() works, then delete the commented block.
-        # node = self.equipment_tree.get_node(self._equipment_id(path, None))
-        # if not node:
-        #     raise ValueError(f'No equipment found for topic: {path}')
-        # self.equipment_tree.raise_on_locks(node, sender)
-        # remote = self.equipment_tree.get_remote(node.identifier)
-        # remote.revert_all(**kwargs)
-
         headers = self._get_headers(sender)
         self._push_result_topic_pair(REVERT_DEVICE_RESPONSE_PREFIX, path, headers, None)
 
@@ -1142,7 +1137,8 @@ class PlatformDriverAgent(Agent):
             return
 
         try:
-            self.set_point(point, None, message)
+            equip_id = self._equipment_id(point)
+            self._set_point(equip_id, message, sender, **{})
         except Exception as ex:
             self._handle_error(ex, point, headers)
 
