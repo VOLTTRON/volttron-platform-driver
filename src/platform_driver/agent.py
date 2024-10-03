@@ -485,16 +485,17 @@ class PlatformDriverAgent(Agent):
         self._start(points)
 
     def _start(self, points: Iterable[PointNode]) -> None:
-        for p in points:
-            if p.active:
-                return
-            else:
-                p.active = True
-                group = self.equipment_tree.get_group(p.identifier)
-                if self.config.allow_reschedule:
-                    self.poll_schedulers[group].schedule()
-                else:
-                    self.poll_schedulers[group].add_to_schedule(p)
+        raise NotImplementedError('start is not yet implemented.')
+        # for p in points:
+        #     if p.active:
+        #         return
+        #     else:
+        #         p.active = True
+        #         group = self.equipment_tree.get_group(p.identifier)
+        #         if self.config.allow_reschedule:
+        #             self.poll_schedulers[group].schedule()
+        #         else:
+        #             self.poll_schedulers[group].add_to_schedule(p)
 
     @RPC.export
     def stop(self, topic: str | Sequence[str] | Set[str] = None, regex: str = None) -> None:
@@ -508,16 +509,17 @@ class PlatformDriverAgent(Agent):
         self._stop(points)
 
     def _stop(self, points: Iterable[PointNode]) -> None:
-        for p in points:
-            if not p.active:
-                return
-            else:
-                p.active = False
-                group = self.equipment_tree.get_group(p.identifier)
-                if self.config.allow_reschedule:
-                    self.poll_schedulers[group].schedule()
-                else:
-                    self.poll_schedulers[group].remove_from_schedule(p)
+        raise NotImplementedError('stop is not yet implemented.')
+        # for p in points:
+        #     if not p.active:
+        #         return
+        #     else:
+        #         p.active = False
+        #         group = self.equipment_tree.get_group(p.identifier)
+        #         if self.config.allow_reschedule:
+        #             self.poll_schedulers[group].schedule()
+        #         else:
+        #             self.poll_schedulers[group].remove_from_schedule(p)
 
     @RPC.export
     def enable(self, topic: str | Sequence[str] | Set[str] = None, regex: str = None) -> None:
@@ -531,13 +533,14 @@ class PlatformDriverAgent(Agent):
         self._enable(points)
 
     def _enable(self, nodes: Iterable[PointNode]):
-        for node in nodes:
-            node.config.active = True
-            if not node.is_point:
-                # TODO: Make sure this doesn't trigger UPDATE.
-                self.vip.config.set(node.topic, node.config, trigger_callback=False)
-            else:
-                self.equipment_tree.update_stored_registry_config(node.identifier)
+        raise NotImplementedError('enable is not yet implemented.')
+        # for node in nodes:
+        #     node.config.active = True
+        #     if not node.is_point:
+        #         # TODO: Make sure this doesn't trigger UPDATE.
+        #         self.vip.config.set(node.topic, node.config, trigger_callback=False)
+        #     else:
+        #         self.equipment_tree.update_stored_registry_config(node.identifier)
 
     @RPC.export
     def disable(self, topic: str | Sequence[str] | Set[str] = None, regex: str = None) -> None:
@@ -551,12 +554,13 @@ class PlatformDriverAgent(Agent):
         self._disable(points)
 
     def _disable(self, nodes: Iterable[PointNode]) -> None:
-        for node in nodes:
-            node.config.active = False
-            if not node.is_point:
-                self.vip.config.set(node.topic, node.config, trigger_callback=False)
-            else:
-                self.equipment_tree.update_stored_registry_config(node.identifier)
+        raise NotImplementedError('disable is not yet implemented.')
+        # for node in nodes:
+        #     node.config.active = False
+        #     if not node.is_point:
+        #         self.vip.config.set(node.topic, node.config, trigger_callback=False)
+        #     else:
+        #         self.equipment_tree.update_stored_registry_config(node.identifier)
 
     @RPC.export
     def status(self, topic: str | Sequence[str] | Set[str] = None, regex: str = None) -> dict:
@@ -570,16 +574,19 @@ class PlatformDriverAgent(Agent):
         return self._status(points)
 
     def _status(self, points: Iterable[PointNode]) -> dict:
-        # TODO: Implement _status()
-        return {'error': 'Status reporting is not yet implemented'}
+        raise NotImplementedError('status is not yet implemented.')
+        # # TODO: Implement _status()
+        # return {'error': 'Status reporting is not yet implemented'}
 
     @RPC.export
     def add_node(self, node_topic: str, config: dict, update_schedule: bool = True) -> bool:
-        return self._configure_new_equipment(node_topic, 'NEW', contents=config, schedule_now=update_schedule)
+        raise NotImplementedError('add_node is not yet implemented.')
+        # return self._configure_new_equipment(node_topic, 'NEW', contents=config, schedule_now=update_schedule)
 
     @RPC.export
     def remove_node(self, node_topic: str, leave_disconnected: bool = False) -> bool:
-        return True if self.equipment_tree.remove_segment(node_topic, leave_disconnected) > 0 else False
+        raise NotImplementedError('remove_node is not yet implemented.')
+        # return True if self.equipment_tree.remove_segment(node_topic, leave_disconnected) > 0 else False
 
     @RPC.export
     def add_interface(self, interface_name: str, local_path: str = None) -> bool:
@@ -685,7 +692,7 @@ class PlatformDriverAgent(Agent):
         :param staggered_revert: If this flag is set, reverting of devices will be staggered.
         :type staggered_revert: boolean
         """
-        raise NotImplementedError(' is not yet implemented.')
+        raise NotImplementedError('set_override_on is not yet implemented.')
         # self.override_manager.set_on(pattern, duration, failsafe_revert, staggered_revert)
 
     @RPC.export
@@ -697,7 +704,7 @@ class PlatformDriverAgent(Agent):
         :param pattern: Pattern on which override condition has to be removed.
         :type pattern: str
         """
-        raise NotImplementedError(' is not yet implemented.')
+        raise NotImplementedError('set_override_off is not yet implemented.')
         # return self.override_manager.set_off(pattern)
 
     # Get a list of all the devices with override condition.
@@ -707,7 +714,7 @@ class PlatformDriverAgent(Agent):
 
         Get a list of all the devices with override condition.
         """
-        raise NotImplementedError(' is not yet implemented.')
+        raise NotImplementedError('get_override_devices is not yet implemented.')
         # return list(self.override_manager.devices)
 
     @RPC.export
@@ -716,7 +723,7 @@ class PlatformDriverAgent(Agent):
 
         Clear all overrides.
         """
-        raise NotImplementedError(' is not yet implemented.')
+        raise NotImplementedError('clear_overrides is not yet implemented.')
         # self.override_manager.clear()
 
     @RPC.export
@@ -725,7 +732,7 @@ class PlatformDriverAgent(Agent):
 
         Get a list of all the override patterns.
         """
-        raise NotImplementedError(' is not yet implemented.')
+        raise NotImplementedError('get_override_patterns is not yet implemented.')
         # return list(self.override_manager.patterns)
 
     #-------------------
@@ -1026,11 +1033,12 @@ class PlatformDriverAgent(Agent):
 
             The return values are described in `New Task Response`_.
         """
-        _log.info('Call to deprecated RPC method "request_new_schedule. '
-                   'This method provides compatability with the actuator API, but has been superseded '
-                   'by "new_reservation". Please update to the newer method.')
-        rpc_peer = self.vip.rpc.context.vip_message.peer
-        return self.reservation_manager.new_task(rpc_peer, task_id, priority, requests)
+        raise NotImplementedError('request_new_schedule is not yet implemented.')
+        # _log.info('Call to deprecated RPC method "request_new_schedule. '
+        #            'This method provides compatability with the actuator API, but has been superseded '
+        #            'by "new_reservation". Please update to the newer method.')
+        # rpc_peer = self.vip.rpc.context.vip_message.peer
+        # return self.reservation_manager.new_task(rpc_peer, task_id, priority, requests)
 
     @RPC.export
     def request_cancel_schedule(self, requester_id: str, task_id: str) -> dict:
@@ -1051,11 +1059,12 @@ class PlatformDriverAgent(Agent):
         The return values are described in `Cancel Task Response`_.
 
         """
-        _log.info('Call to deprecated RPC method "request_cancel_schedule. '
-                   'This method provides compatability with the actuator API, but has been superseded '
-                   'by "cancel_reservation". Please update to the newer method.')
-        rpc_peer = self.vip.rpc.context.vip_message.peer
-        return self.reservation_manager.cancel_task(rpc_peer, task_id)  #, publish_result=False)
+        raise NotImplementedError('request_cancel_schedule is not yet implemented.')
+        # _log.info('Call to deprecated RPC method "request_cancel_schedule. '
+        #            'This method provides compatability with the actuator API, but has been superseded '
+        #            'by "cancel_reservation". Please update to the newer method.')
+        # rpc_peer = self.vip.rpc.context.vip_message.peer
+        # return self.reservation_manager.cancel_task(rpc_peer, task_id)  #, publish_result=False)
 
     ##################
     # PubSub Interface
@@ -1208,18 +1217,19 @@ class PlatformDriverAgent(Agent):
 
         with the same header as the request.
         """
-        topic = self._equipment_id(topic.replace(REVERT_DEVICE_TOPIC + '/', '', 1), None)
-        headers = self._get_headers(sender)
-        try:
-            node = self.equipment_tree.get_node(topic)
-            self.equipment_tree.raise_on_locks(node, sender)
-            remote = self.equipment_tree.get_remote(node.identifier)
-            remote.revert_all()
-
-            self._push_result_topic_pair(REVERT_DEVICE_RESPONSE_PREFIX, topic, headers, None)
-
-        except Exception as ex:
-            self._handle_error(ex, topic, headers)
+        raise NotImplementedError('handle_revert_device is not yet implemented.')
+        # topic = self._equipment_id(topic.replace(REVERT_DEVICE_TOPIC + '/', '', 1), None)
+        # headers = self._get_headers(sender)
+        # try:
+        #     node = self.equipment_tree.get_node(topic)
+        #     self.equipment_tree.raise_on_locks(node, sender)
+        #     remote = self.equipment_tree.get_remote(node.identifier)
+        #     remote.revert_all()
+        #
+        #     self._push_result_topic_pair(REVERT_DEVICE_RESPONSE_PREFIX, topic, headers, None)
+        #
+        # except Exception as ex:
+        #     self._handle_error(ex, topic, headers)
 
     def handle_reservation_request(self, _, sender: str, __, topic: str, headers: dict,
                                    message: list[list[str]] | list[str]):
@@ -1265,63 +1275,64 @@ class PlatformDriverAgent(Agent):
         No message is requires to cancel a schedule.
 
         """
-        request_type = headers.get('type')
-        _log.debug(f'handle_schedule_request: {topic}, {headers}, {message}')
-
-        task_id = headers.get('taskID')
-        priority = headers.get('priority')
-
-        now = get_aware_utc_now()
-        if request_type == RESERVATION_ACTION_NEW:
-            try:
-                requests = message[0] if len(message) == 1 else message
-                headers = self._get_headers(sender, now, task_id, RESERVATION_ACTION_NEW)
-                result = self.reservation_manager.new_task(sender, task_id, requests, priority, now)
-            except Exception as ex:
-                return self._handle_unknown_reservation_error(ex, headers, message)
-            # Dealing with success and other first world problems.
-            if result.success:
-                for preempted_task in result.data:
-                    preempt_headers = self._get_headers(preempted_task[0], task_id=preempted_task[1],
-                                                        action_type=RESERVATION_ACTION_CANCEL)
-                    self.vip.pubsub.publish('pubsub',
-                                            topic=RESERVATION_RESULT_TOPIC,
-                                            headers=preempt_headers,
-                                            message={
-                                                'result': RESERVATION_CANCEL_PREEMPTED,
-                                                'info': '',
-                                                'data': {
-                                                    'agentID': sender,
-                                                    'taskID': task_id
-                                                }
-                                            })
-            results = {'result': (RESERVATION_RESPONSE_SUCCESS if result.success else RESERVATION_RESPONSE_FAILURE),
-                       'data': (result.data if not result.success else {}),
-                       'info': result.info_string}
-            self.vip.pubsub.publish('pubsub', topic=RESERVATION_RESULT_TOPIC, headers=headers, message=results)
-
-
-        elif request_type == RESERVATION_ACTION_CANCEL:
-            try:
-                result = self.reservation_manager.cancel_reservation(sender, task_id)
-                message = {
-                    'result': (RESERVATION_RESPONSE_SUCCESS if result.success else RESERVATION_RESPONSE_FAILURE),
-                    'info': result.info_string,
-                    'data': {}
-                }
-                topic = RESERVATION_RESULT_TOPIC
-                headers = self._get_headers(sender, now, task_id, RESERVATION_ACTION_CANCEL)
-                self.vip.pubsub.publish('pubsub', topic, headers=headers, message=message)
-
-            except Exception as ex:
-                return self._handle_unknown_reservation_error(ex, headers, message)
-        else:
-            _log.debug('handle-schedule_request, invalid request type')
-            self.vip.pubsub.publish('pubsub', RESERVATION_RESULT_TOPIC, headers, {
-                'result': RESERVATION_RESPONSE_FAILURE,
-                'info': 'INVALID_REQUEST_TYPE',
-                'data': {}
-            })
+        raise NotImplementedError('handle_reservation_request is not yet implemented.')
+        # request_type = headers.get('type')
+        # _log.debug(f'handle_schedule_request: {topic}, {headers}, {message}')
+        #
+        # task_id = headers.get('taskID')
+        # priority = headers.get('priority')
+        #
+        # now = get_aware_utc_now()
+        # if request_type == RESERVATION_ACTION_NEW or request_type == LEGACY_RESERVATION_ACTION_NEW:
+        #     try:
+        #         requests = message[0] if len(message) == 1 else message
+        #         headers = self._get_headers(sender, now, task_id, RESERVATION_ACTION_NEW)
+        #         result = self.reservation_manager.new_task(sender, task_id, priority, requests, now)
+        #     except Exception as ex:
+        #         return self._handle_unknown_reservation_error(ex, headers, message)
+        #     # Dealing with success and other first world problems.
+        #     if result.success:
+        #         for preempted_task in result.data:
+        #             preempt_headers = self._get_headers(preempted_task[0], task_id=preempted_task[1],
+        #                                                 action_type=RESERVATION_ACTION_CANCEL)
+        #             self.vip.pubsub.publish('pubsub',
+        #                                     topic=RESERVATION_RESULT_TOPIC,
+        #                                     headers=preempt_headers,
+        #                                     message={
+        #                                         'result': RESERVATION_CANCEL_PREEMPTED,
+        #                                         'info': '',
+        #                                         'data': {
+        #                                             'agentID': sender,
+        #                                             'taskID': task_id
+        #                                         }
+        #                                     })
+        #     results = {'result': (RESERVATION_RESPONSE_SUCCESS if result.success else RESERVATION_RESPONSE_FAILURE),
+        #                'data': (result.data if not result.success else {}),
+        #                'info': result.info_string}
+        #     self.vip.pubsub.publish('pubsub', topic=RESERVATION_RESULT_TOPIC, headers=headers, message=results)
+        #
+        #
+        # elif request_type == RESERVATION_ACTION_CANCEL or request_type == LEGACY_RESERVATION_ACTION_CANCEL:
+        #     try:
+        #         result = self.reservation_manager.cancel_reservation(sender, task_id)
+        #         message = {
+        #             'result': (RESERVATION_RESPONSE_SUCCESS if result.success else RESERVATION_RESPONSE_FAILURE),
+        #             'info': result.info_string,
+        #             'data': {}
+        #         }
+        #         topic = RESERVATION_RESULT_TOPIC
+        #         headers = self._get_headers(sender, now, task_id, RESERVATION_ACTION_CANCEL)
+        #         self.vip.pubsub.publish('pubsub', topic, headers=headers, message=message)
+        #
+        #     except Exception as ex:
+        #         return self._handle_unknown_reservation_error(ex, headers, message)
+        # else:
+        #     _log.debug('handle-schedule_request, invalid request type')
+        #     self.vip.pubsub.publish('pubsub', RESERVATION_RESULT_TOPIC, headers, {
+        #         'result': RESERVATION_RESPONSE_FAILURE,
+        #         'info': 'INVALID_REQUEST_TYPE',
+        #         'data': {}
+        #     })
 
     ################
     # Helper Methods
