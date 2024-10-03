@@ -9,7 +9,7 @@ The Platform Driver agent is a special purpose agent a user can install on the p
 # Requires
 
 * python >= 3.10
-* volttron.core >= 2.0.0rc0
+* volttron-core >= 2.0.0rc0
 * volttron-lib-base-driver >= 2.0.0rc0
 
 # Documentation
