@@ -43,20 +43,21 @@ volttron-lib-base-driver = ">=2.0.0rc0"
 
 
 [tool.poetry.group.dev.dependencies]
-pytest = "^6.2.5"
-pytest-cov = "^3.0.0"
-mock = "^4.0.3"
-pre-commit = "^2.17.0"
-yapf = "^0.32.0"
-toml = "^0.10.2"
-isort = "^5.10.1"
-safety = "^1.10.3"
-mypy = "^0.942"
-coverage = "^6.3.2"
+pytest = ">=6.2.5,<7.0.0"
+pytest-cov = ">=3.0.0,<4.0.0"
+mock = ">=4.0.3,<5.0.0"
+pre-commit = ">=2.17.0,<3.0.0"
+yapf = ">=0.32.0,<1.0.0"
+toml = ">=0.10.2,<1.0.0"
+isort = ">=5.10.1,<6.0.0"
+safety = ">=1.10.3,<2.0.0"
+mypy = ">=0.942,<1.0"
+coverage = ">=6.3.2,<7.0.0"
+
 
 [tool.poetry.group.documentation.dependencies]
-Sphinx = "^4.5.0"
-sphinx-rtd-theme = "^1.0.0"
+Sphinx = ">=4.5.0,<5.0.0"
+sphinx-rtd-theme = ">=1.0.0,<2.0.0"
 
 [tool.poetry.scripts]
 volttron-platform-driver = "platform_driver.agent:main"
