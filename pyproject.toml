@@ -14,7 +14,7 @@ exclude = ['docs/']
 
 [tool.poetry]
 name = "volttron-platform-driver"
-version = "0.2.1rc0"
+version = "2.0.0rc0"
 description = "The Platform Driver agent is a special purpose agent that manages communication between the Volttron platform and devices. The Platform driver features a number of endpoints for collecting data and sending control signals using the message bus and automatically publishes data to the bus on a specified interval."
 authors = ["VOLTTRON Team <volttron@pnnl.gov>"]
 license = "Apache License 2.0"
@@ -34,8 +34,12 @@ classifiers = [
 include = ["volttron-platform-driver-*-default-vip-id"]
 
 [tool.poetry.dependencies]
+pydantic = ">=2"
 python = ">=3.10,<4.0"
-volttron-lib-base-driver = ">=0.2.1rc2,<1.0.0"
+treelib = ">=1.7.0"
+volttron-core = ">=2.0.0rc0"
+volttron-lib-base-driver = ">=2.0.0rc0"
+# volttron-lib-topic-tree = { path = "../volttron-lib-topic-tree", develop = true }
 
 
 [tool.poetry.group.dev.dependencies]
@@ -49,7 +53,7 @@ isort = ">=5.10.1,<6.0.0"
 safety = ">=1.10.3,<2.0.0"
 mypy = ">=0.942,<1.0"
 coverage = ">=6.3.2,<7.0.0"
-volttron-testing = ">=0.4.1rc3,<1.0.0"
+
 
 [tool.poetry.group.documentation.dependencies]
 Sphinx = ">=4.5.0,<5.0.0"
