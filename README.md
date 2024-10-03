@@ -165,7 +165,7 @@ Before installing, VOLTTRON should be installed and running.  Its virtual enviro
 Information on how to install of the VOLTTRON platform can be found
 [here](https://github.com/eclipse-volttron/volttron-core).
 
-Install and start the volttron-platform-driver.
+Install the volttron-platform-driver.
 
 ```shell
 vctl install volttron-platform-driver --vip-identity platform.driver
@@ -183,11 +183,11 @@ In the current RC version of the driver, only two interfaces are fully supported
 
 * A Fake Driver (which returns data from a csv file):
     ```shell
-    poetry add volttron-lib-fake-driver
+    poetry add --directory $VOLTTRON_HOME volttron-lib-fake-driver
     ```
 * BACnet:
     ```shell
-    poetry add volttron-lib-fake-driver
+    poetry add --directory $VOLTTRON_HOME volttron-lib-fake-driver
     ```
 
 Additional interfaces will be available in later RC releases.
