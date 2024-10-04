@@ -6,13 +6,14 @@
 
 The Platform Driver agent is a special purpose agent a user can install on the platform to manage communication of the platform with devices. The Platform driver features a number of endpoints for collecting data and sending control signals using the message bus and automatically publishes data to the bus on a specified interval.
 
-# Requires
+## Pre-requisite
 
-- Python = 3.10
-- pip >= 24.0
-- poetry >= 1.8.2
-- python >= 3.10
-- volttron >= 11.0.0rc0
+Before installing this agent, VOLTTRON (>=11.0.0rc0) should be installed and running.  Its virtual environment should be active.
+Information on how to install of the VOLTTRON platform can be found
+[here](https://github.com/eclipse-volttron/volttron-core).
+
+## Automatically installed dependencies
+
 - volttron-lib-base-driver >= 2.0.0rc0
 
 # Documentation
@@ -163,10 +164,6 @@ revert_device(path: str, *args, **kwargs)
 ```
 
 # Installation
-
-Before installing, VOLTTRON should be installed and running.  Its virtual environment should be active.
-Information on how to install of the VOLTTRON platform can be found
-[here](https://github.com/eclipse-volttron/volttron-core).
 
 Install the volttron-platform-driver.
 
