@@ -3,8 +3,84 @@ from unittest.mock import MagicMock, Mock, patch
 from datetime import datetime
 
 from volttron.utils import format_timestamp, get_aware_utc_now
-from platform_driver.agent import PlatformDriverAgent
+from platform_driver.agent import PlatformDriverAgent, PlatformDriverConfig, STATUS_BAD
 from platform_driver.constants import VALUE_RESPONSE_PREFIX, RESERVATION_RESULT_TOPIC
+
+class TestPDALoadAgentConfig:
+    @pytest.fixture
+    def PDA(self):
+        PDA = PlatformDriverAgent()
+        PDA.core = MagicMock()
+        PDA.vip = MagicMock()
+        PDA.vip.health.set_status = MagicMock()
+        PDA.core.connected = True
+        return PDA
+
+    def test_load_agent_config_with_valid_config(self, PDA):
+        """Tests that the result is the config we provided, and that its an instance of PlatformDriverAgentConfig."""
+        PDA.core.connected = True
+        valid_config = {
+            'max_open_sockets': 5,
+            'max_concurrent_publishes': 10,
+            'scalability_test': False,
+            'remote_heartbeat_interval': 30,
+            'reservation_preempt_grace_time': 60
+        }
+
+        result = PDA._load_agent_config(valid_config)
+
+        assert isinstance(result, PlatformDriverConfig)
+        assert result.max_open_sockets == 5
+        assert result.max_concurrent_publishes == 10
+        assert result.scalability_test == False
+        assert result.remote_heartbeat_interval == 30
+        assert result.reservation_preempt_grace_time == 60
+
+        PDA.vip.health.set_status.assert_not_called()
+
+    def test_load_agent_config_with_invalid_config(self, PDA, caplog):
+        """tests that a default config is returned when invalid type is provided"""
+        PDA.core.connected = True
+        # Prepare an invalid configuration dictionary
+        invalid_config = {
+            'max_open_sockets': 'invalid',  # should be an int
+            'max_concurrent_publishes': 10,
+            'scalability_test': False,
+            'remote_heartbeat_interval': 30,
+            'reservation_preempt_grace_time': 60
+        }
+
+        result = PDA._load_agent_config(invalid_config)
+
+        assert isinstance(result, PlatformDriverConfig)
+        # Check that 'invalid' is not kept in the config
+        assert result.max_open_sockets != 'invalid'
+        assert any(
+            'Validation of platform driver configuration file failed. Using default values.' in message for message in
+            caplog.text.splitlines())
+        # Ensure health status was set to bad
+        PDA.vip.health.set_status.assert_called_once()
+        status_args = PDA.vip.health.set_status.call_args[0]
+        assert status_args[0] == STATUS_BAD
+        assert 'Error processing configuration' in status_args[1]
+
+    def test_load_agent_config_with_invalid_config_agent_not_connected(self, PDA, caplog):
+        PDA.core.connected = False
+        # invalid configuration dictionary
+        invalid_config = {
+            'max_open_sockets': 'invalid',  # Should be an int
+            'max_concurrent_publishes': 10,
+            'scalability_test': False,
+            'remote_heartbeat_interval': 30,
+            'reservation_preempt_grace_time': 60
+        }
+        result = PDA._load_agent_config(invalid_config)
+        assert isinstance(result, PlatformDriverConfig)
+        assert any(
+            'Validation of platform driver configuration file failed. Using default values.' in message for message in
+            caplog.text.splitlines())
+        # make sure health status was not set since agent is not connected
+        PDA.vip.health.set_status.assert_not_called()
 
 class TestPlatformDriverAgentConfigureMain:
 
