@@ -2,10 +2,11 @@ import pytest
 from unittest.mock import MagicMock, Mock, patch
 from datetime import datetime
 import gevent
+from typing import Set, Dict
 
 from volttron.utils import format_timestamp, get_aware_utc_now
 from platform_driver.agent import PlatformDriverAgent, PlatformDriverConfig, STATUS_BAD, RemoteConfig, DeviceConfig, \
-    PointConfig
+    PointConfig, DriverAgent, PointNode
 from platform_driver.constants import VALUE_RESPONSE_PREFIX, RESERVATION_RESULT_TOPIC
 
 class TestPDALoadAgentConfig:
@@ -928,7 +929,6 @@ class TestPDASemanticQuery:
         assert result == {}
         assert any("Semantic Interoperability Service timed out" in record.message for record in caplog.records)
 
-
 class TestPDABuildQueryPlan:
     """Tests for build_query_plan"""
 
@@ -970,8 +970,7 @@ class TestPDABuildQueryPlan:
         expected_result[PDA.driver_agent_mock] = {PDA.point_node_mock}
         assert result == expected_result
 
-
-class TestPlatformDriverAgentGet:
+class TestPDAGet:
     """Tests for get."""
 
     @pytest.fixture
@@ -1012,10 +1011,427 @@ class TestPlatformDriverAgentGet:
         PDA.build_query_plan.assert_called_once_with("topic", "regex")
         remote_mock.get_multiple_points.assert_called_once_with(["point"])
 
+class TestPDASemanticGet:
 
-class TestPlatformDriverAgentSet:
-    """Tests for set"""
-    pass    # TODO wait for final additions
+    @pytest.fixture
+    def PDA(self):
+        """Fixture to create a PlatformDriverAgent instance with mocked dependencies."""
+        PDA = PlatformDriverAgent()
+        PDA.semantic_query = MagicMock()
+        PDA.build_query_plan = MagicMock()
+        PDA._get = MagicMock()
+        return PDA
+
+    def test_semantic_get_success(self, PDA):
+        """Test semantic_get returns expected result when dependencies work correctly."""
+        query = "temperature sensor"
+        exact_matches = {"sensor": ["temp_sensor_1", "temp_sensor_2"]}
+        query_plan = {"steps": ["fetch_data", "aggregate"]}
+        expected_result = ({"data": "aggregated_data"}, {"metadata": "info"})
+
+        # Set up mocks
+        PDA.semantic_query.return_value = exact_matches
+        PDA.build_query_plan.return_value = query_plan
+        PDA._get.return_value = expected_result
+
+        result = PDA.semantic_get(query)
+
+        PDA.semantic_query.assert_called_once_with(query)
+        PDA.build_query_plan.assert_called_once_with(exact_matches)
+        PDA._get.assert_called_once_with(query_plan)
+        assert result == expected_result
+
+    def test_semantic_get_no_matches(self, PDA):
+        """Test semantic_get returns expected result when semantic_query finds no matches."""
+        query = "unknown device"
+        exact_matches = {}
+        query_plan = {}
+        expected_result = ({}, {})
+
+        # Set up mocks
+        PDA.semantic_query.return_value = exact_matches
+        PDA.build_query_plan.return_value = query_plan
+        PDA._get.return_value = expected_result
+
+        result = PDA.semantic_get(query)
+
+        PDA.semantic_query.assert_called_once_with(query)
+        PDA.build_query_plan.assert_called_once_with(exact_matches)
+        PDA._get.assert_called_once_with(query_plan)
+        assert result == expected_result
+
+    def test_semantic_get_exception_in_semantic_query(self, PDA, caplog):
+        """Test semantic_get handles exceptions raised by semantic_query."""
+        query = "faulty query"
+        PDA.semantic_query.side_effect = Exception("Semantic service error")
+
+        with pytest.raises(Exception) as exc_info:
+            PDA.semantic_get(query)
+
+        PDA.semantic_query.assert_called_once_with(query)
+        PDA.build_query_plan.assert_not_called()
+        PDA._get.assert_not_called()
+        assert "Semantic service error" in str(exc_info.value)
+
+    def test_semantic_get_exception_in_build_query_plan(self, PDA, caplog):
+        """Test semantic_get handles exceptions raised by build_query_plan."""
+        query = "temperature sensor"
+        exact_matches = {"sensor": ["temp_sensor_1", "temp_sensor_2"]}
+        PDA.semantic_query.return_value = exact_matches
+        PDA.build_query_plan.side_effect = Exception("Query plan error")
+
+        with pytest.raises(Exception) as exc_info:
+            PDA.semantic_get(query)
+
+        PDA.semantic_query.assert_called_once_with(query)
+        PDA.build_query_plan.assert_called_once_with(exact_matches)
+        PDA._get.assert_not_called()
+        assert "Query plan error" in str(exc_info.value)
+
+    def test_semantic_get_exception_in_get(self, PDA, caplog):
+        """Test semantic_get handles exceptions raised by _get."""
+        query = "temperature sensor"
+        exact_matches = {"sensor": ["temp_sensor_1", "temp_sensor_2"]}
+        query_plan = {"steps": ["fetch_data", "aggregate"]}
+        PDA.semantic_query.return_value = exact_matches
+        PDA.build_query_plan.return_value = query_plan
+        PDA._get.side_effect = Exception("Get data error")
+
+        with pytest.raises(Exception) as exc_info:
+            PDA.semantic_get(query)
+
+        PDA.semantic_query.assert_called_once_with(query)
+        PDA.build_query_plan.assert_called_once_with(exact_matches)
+        PDA._get.assert_called_once_with(query_plan)
+        assert "Get data error" in str(exc_info.value)
+
+class TestPDAUnderscoreGet:
+    """Tests for _get"""
+
+    @pytest.fixture
+    def PDA(self):
+        """Fixture to create a PlatformDriverAgent instance with mocked dependencies."""
+        PDA = PlatformDriverAgent()
+        PDA.equipment_tree = MagicMock()
+        return PDA
+
+    def test_get_success(self, PDA):
+        """Test that _get successfully retrieves and processes data from remotes."""
+        # Arrange
+        remote = MagicMock(spec=DriverAgent)
+        point1 = MagicMock(spec=PointNode)
+        point1.identifier = 'topic1'
+        point2 = MagicMock(spec=PointNode)
+        point2.identifier = 'topic2'
+        point_set: Set[PointNode] = {point1, point2}
+        query_plan: Dict[DriverAgent, Set[PointNode]] = {remote: point_set}
+
+        q_return_values = {'topic1': 100, 'topic2': 200}
+        remote.get_multiple_points.return_value = (q_return_values, {})
+
+        # Mock equipment_tree.get_node to return nodes
+        node1 = MagicMock(spec=PointNode)
+        node2 = MagicMock(spec=PointNode)
+        PDA.equipment_tree.get_node.side_effect = lambda topic: {'topic1': node1, 'topic2': node2}.get(topic)
+
+        results, errors = PDA._get(query_plan)
+
+        remote.get_multiple_points.assert_called_once()
+        args, _ = remote.get_multiple_points.call_args
+        assert set(args[0]) == {'topic1', 'topic2'}
+
+        PDA.equipment_tree.get_node.assert_any_call('topic1')
+        PDA.equipment_tree.get_node.assert_any_call('topic2')
+
+        node1.last_value = 100
+        node2.last_value = 200
+        assert node1.last_value == 100
+        assert node2.last_value == 200
+
+        assert results == q_return_values
+        assert errors == {}
+
+    def test_get_with_errors(self, PDA):
+        """Test that _get correctly captures errors returned by remotes."""
+        # Arrange
+        remote = MagicMock(spec=DriverAgent)
+        point1 = MagicMock(spec=PointNode)
+        point1.identifier = 'topic1'
+        point_set: Set[PointNode] = {point1}
+        query_plan: Dict[DriverAgent, Set[PointNode]] = {remote: point_set}
+
+        remote.get_multiple_points.return_value = ({}, {'topic1': 'Error fetching data'})
+
+        results, errors = PDA._get(query_plan)
+
+        remote.get_multiple_points.assert_called_once()
+        args, _ = remote.get_multiple_points.call_args
+        assert set(args[0]) == {'topic1'}
+
+        PDA.equipment_tree.get_node.assert_not_called()
+
+        assert results == {}
+        assert errors == {'topic1': 'Error fetching data'}
+
+    def test_get_empty_query_plan(self, PDA):
+        """Test that _get handles an empty query_plan gracefully."""
+        query_plan: Dict[DriverAgent, Set[PointNode]] = {}
+
+        results, errors = PDA._get(query_plan)
+
+        # No remotes should be called
+        remote_calls = []
+        for mock in PDA.equipment_tree.mock_calls:
+            if 'get_node' in mock[0]:
+                remote_calls.append(mock)
+        assert not remote_calls
+
+        assert results == {}
+        assert errors == {}
+
+class TestPDASet:
+    @pytest.fixture
+    def pda(self):
+        """Fixture to create a PlatformDriverAgent instance with mocked dependencies."""
+        pda = PlatformDriverAgent()
+        pda.build_query_plan = MagicMock()
+        pda._set = MagicMock()
+        return pda
+
+    def test_set_with_single_topic_and_single_value(self, pda):
+        """
+        Test the 'set' method with a single topic and a single value,
+        without confirmation and without mapping points.
+        """
+        value = 100  # Single value for all points
+        topics = ['topic1']
+        regex = None
+        confirm_values = False
+        map_points = False
+
+        expected_query_plan = {'remote1': {'point1'}}
+
+        pda.build_query_plan.return_value = expected_query_plan
+
+        expected_results = {'topic1': 'success'}
+        expected_errors = {}
+        pda._set.return_value = (expected_results, expected_errors)
+
+        results, errors = pda.set(
+            value=value,
+            topic=topics,
+            regex=regex,
+            confirm_values=confirm_values,
+            map_points=map_points
+        )
+        pda.build_query_plan.assert_called_once_with(topics, regex)
+        pda._set.assert_called_once_with(value, expected_query_plan, confirm_values, map_points)
+        assert results == expected_results
+        assert errors == expected_errors
+
+    def test_set_with_multiple_topics_and_multiple_values(self, pda):
+        """
+        Test the 'set' method with multiple topics and multiple values,
+        with confirmation and with mapping points.
+        """
+        value = {'topic1': 100, 'topic2': 200}  # Different values for each topic
+        topics = ['topic1', 'topic2']
+        regex = None
+        confirm_values = True
+        map_points = True
+
+        expected_query_plan = {'remote1': {'point1'}, 'remote2': {'point2'}}
+
+        pda.build_query_plan.return_value = expected_query_plan
+
+        expected_results = {'topic1': 'confirmed', 'topic2': 'confirmed'}
+        expected_errors = {}
+        pda._set.return_value = (expected_results, expected_errors)
+
+        results, errors = pda.set(
+            value=value,
+            topic=topics,
+            regex=regex,
+            confirm_values=confirm_values,
+            map_points=map_points
+        )
+        pda.build_query_plan.assert_called_once_with(topics, regex)
+        pda._set.assert_called_once_with(value, expected_query_plan, confirm_values, map_points)
+        assert results == expected_results
+        assert errors == expected_errors
+
+    def test_set_with_regex(self, pda):
+        """
+        Test the 'set' method with a regex pattern for topic selection.
+        """
+        value = 150  # Single value for all matched points
+        topics = None
+        regex = r'^sensor_.*$'  # Regex to match topics starting with 'sensor_'
+        confirm_values = False
+        map_points = False
+
+        expected_query_plan = {'remote1': {'point_sensor1', 'point_sensor2'}}
+
+        pda.build_query_plan.return_value = expected_query_plan
+
+        expected_results = {'sensor1': 'success', 'sensor2': 'success'}
+        expected_errors = {}
+        pda._set.return_value = (expected_results, expected_errors)
+
+        results, errors = pda.set(
+            value=value,
+            topic=topics,
+            regex=regex,
+            confirm_values=confirm_values,
+            map_points=map_points
+        )
+        pda.build_query_plan.assert_called_once_with(topics, regex)
+        pda._set.assert_called_once_with(value, expected_query_plan, confirm_values, map_points)
+        assert results == expected_results
+        assert errors == expected_errors
+
+    def test_set_returns_errors_when_set_fails(self, pda):
+        """
+        Test the 'set' method returns errors when the '_set' method indicates failures.
+        """
+        value = 50  # Single value for all points
+        topics = ['topic5']
+        regex = None
+        confirm_values = False
+        map_points = False
+
+        expected_query_plan = {'remote3': {'point5'}}
+
+        pda.build_query_plan.return_value = expected_query_plan
+
+        expected_results = {}
+        expected_errors = {'topic5': 'Failed to set value'}
+        pda._set.return_value = (expected_results, expected_errors)
+
+        results, errors = pda.set(
+            value=value,
+            topic=topics,
+            regex=regex,
+            confirm_values=confirm_values,
+            map_points=map_points
+        )
+
+
+        pda.build_query_plan.assert_called_once_with(topics, regex)
+        pda._set.assert_called_once_with(value, expected_query_plan, confirm_values, map_points)
+        assert results == expected_results
+        assert errors == expected_errors
+
+class TestPDASemanticSet:
+    @pytest.fixture
+    def pda(self):
+        pda = PlatformDriverAgent()
+        pda.semantic_query = MagicMock()
+        pda.build_query_plan = MagicMock()
+        pda._set = MagicMock()
+        return pda
+
+    def test_semantic_set_with_valid_query_no_confirm(self, pda):
+        """Test 'semantic_set' with a valid query and no confirmation"""
+        value = 100
+        query = "temperature sensors"
+        confirm_values = False
+
+        exact_matches = {'remote1': {'point1', 'point2'}}
+        expected_query_plan = {'remote1': {'point1', 'point2'}}
+
+        pda.semantic_query.return_value = exact_matches
+        pda.build_query_plan.return_value = expected_query_plan
+
+        # Mock _set to return specific results and errors
+        expected_results = {'point1': 100, 'point2': 100}
+        expected_errors = {}
+        pda._set.return_value = (expected_results, expected_errors)
+
+        results, errors = pda.semantic_set(value=value, query=query, confirm_values=confirm_values)
+
+        pda.semantic_query.assert_called_once_with(query)
+        pda.build_query_plan.assert_called_once_with(exact_matches)
+        pda._set.assert_called_once_with(value, expected_query_plan, confirm_values)
+        assert results == expected_results
+        assert errors == expected_errors
+
+    def test_semantic_set_with_valid_query_with_confirm(self, pda):
+        """Test 'semantic_set' with a valid query and confirmation"""
+        value = {'point1': 100, 'point2': 200}
+        query = "humidity sensors"
+        confirm_values = True
+
+        exact_matches = {'remote2': {'point3', 'point4'}}
+        expected_query_plan = {'remote2': {'point3', 'point4'}}
+
+        # Mock semantic_query and build_query_plan
+        pda.semantic_query.return_value = exact_matches
+        pda.build_query_plan.return_value = expected_query_plan
+
+        # Mock _set to return specific results and errors
+        expected_results = {'point3': 100, 'point4': 200}
+        expected_errors = {}
+        pda._set.return_value = (expected_results, expected_errors)
+
+        results, errors = pda.semantic_set(value=value, query=query, confirm_values=confirm_values)
+
+        pda.semantic_query.assert_called_once_with(query)
+        pda.build_query_plan.assert_called_once_with(exact_matches)
+        pda._set.assert_called_once_with(value, expected_query_plan, confirm_values)
+        assert results == expected_results
+        assert errors == expected_errors
+
+    def test_semantic_set_with_no_matches(self, pda):
+        """Test 'semantic_set' when 'semantic_query' returns no matches"""
+        value = 50
+        query = "unknown devices"
+        confirm_values = False
+
+        exact_matches = {}
+        expected_query_plan = {}
+
+        # Mock semantic_query and build_query_plan
+        pda.semantic_query.return_value = exact_matches
+        pda.build_query_plan.return_value = expected_query_plan
+
+        # Mock _set to return specific results and errors
+        expected_results = {}
+        expected_errors = {}
+        pda._set.return_value = (expected_results, expected_errors)
+
+        results, errors = pda.semantic_set(value=value, query=query, confirm_values=confirm_values)
+
+        pda.semantic_query.assert_called_once_with(query)
+        pda.build_query_plan.assert_called_once_with(exact_matches)
+        pda._set.assert_called_once_with(value, expected_query_plan, confirm_values)
+        assert results == expected_results
+        assert errors == expected_errors
+
+    def test_semantic_set_returns_errors_when_set_fails(self, pda):
+        """Test 'semantic_set' when '_set' returns errors"""
+        value = 75
+        query = "pressure sensors"
+        confirm_values = False
+
+        exact_matches = {'remote3': {'point5'}}
+        expected_query_plan = {'remote3': {'point5'}}
+
+        pda.semantic_query.return_value = exact_matches
+        pda.build_query_plan.return_value = expected_query_plan
+
+        # Mock _set to return empty results and specific errors
+        expected_results = {}
+        expected_errors = {'point5': 'Failed to set value'}
+        pda._set.return_value = (expected_results, expected_errors)
+
+        results, errors = pda.semantic_set(value=value, query=query, confirm_values=confirm_values)
+
+        pda.semantic_query.assert_called_once_with(query)
+        pda.build_query_plan.assert_called_once_with(exact_matches)
+        pda._set.assert_called_once_with(value, expected_query_plan, confirm_values)
+        assert results == expected_results
+        assert errors == expected_errors
 
 
 class TestPlatformDriverAgentRevert:
