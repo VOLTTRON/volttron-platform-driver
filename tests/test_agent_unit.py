@@ -3,7 +3,8 @@ from unittest.mock import MagicMock, Mock, patch
 from datetime import datetime
 
 from volttron.utils import format_timestamp, get_aware_utc_now
-from platform_driver.agent import PlatformDriverAgent, PlatformDriverConfig, STATUS_BAD
+from platform_driver.agent import PlatformDriverAgent, PlatformDriverConfig, STATUS_BAD, RemoteConfig, DeviceConfig, \
+    PointConfig
 from platform_driver.constants import VALUE_RESPONSE_PREFIX, RESERVATION_RESULT_TOPIC
 
 class TestPDALoadAgentConfig:
@@ -82,7 +83,7 @@ class TestPDALoadAgentConfig:
         # make sure health status was not set since agent is not connected
         PDA.vip.health.set_status.assert_not_called()
 
-class TestPlatformDriverAgentConfigureMain:
+class TestPDAConfigureMain:
 
     @pytest.fixture
     def PDA(self):
@@ -104,6 +105,78 @@ class TestPlatformDriverAgentConfigureMain:
             mock_configure_publish_lock.assert_called_once()
 
 
+class TestPDASeparateEquipmentConfigs:
+    @pytest.fixture
+    def PDA(self):
+        PDA = PlatformDriverAgent()
+        PDA.core = MagicMock()
+        PDA.vip = MagicMock()
+        PDA.vip.config.get = Mock(return_value='{}')
+        return PDA
+
+    def test_separate_equipment_configs(self, PDA):
+        # Mock the _get_configured_interface method to return a mock interface
+        mock_interface = MagicMock()
+        mock_interface.INTERFACE_CONFIG_CLASS = MagicMock()
+        mock_interface.REGISTER_CONFIG_CLASS = MagicMock()
+        PDA._get_configured_interface = MagicMock(return_value=mock_interface)
+
+        # Define a sample configuration dictionary
+        config_dict = {
+            'remote_config': {
+                'driver_type': 'mock_driver',
+                'some_remote_setting': 'value'
+            },
+            'registry_config': [
+                {'point_name': 'temperature', 'unit': 'C'},
+                {'point_name': 'humidity', 'unit': '%'}
+            ],
+            'some_device_setting': 'device_value'
+        }
+
+        # Mock the instantiation of INTERFACE_CONFIG_CLASS
+        remote_config_instance = MagicMock()
+        remote_config_instance.driver_type = 'mock_driver'
+        remote_config_instance.some_remote_setting = 'value'
+        mock_interface.INTERFACE_CONFIG_CLASS.return_value = remote_config_instance
+
+        # Mock the instantiation of DeviceConfig
+        dev_config_instance = MagicMock()
+        dev_config_instance.some_device_setting = 'device_value'
+        dev_config_instance.equipment_specific_fields = {}
+
+        # Mock the instantiation of REGISTER_CONFIG_CLASS
+        point_config_instances = []
+        for reg in config_dict['registry_config']:
+            point_config_instance = MagicMock()
+            point_config_instance.point_name = reg['point_name']
+            point_config_instance.unit = reg['unit']
+            point_config_instances.append(point_config_instance)
+
+        # Set side effect so that each call to REGISTER_CONFIG_CLASS returns the next point config instance
+        mock_interface.REGISTER_CONFIG_CLASS.side_effect = point_config_instances
+
+        # Patch DeviceConfig and RemoteConfig where they are imported in the module
+        with patch('platform_driver.agent.DeviceConfig', return_value=dev_config_instance) as mock_device_config_class, \
+             patch('platform_driver.agent.RemoteConfig', return_value=remote_config_instance) as mock_remote_config_class:
+
+            remote_config, dev_config, point_configs = PDA._separate_equipment_configs(config_dict)
+
+        # Check remote_config
+        assert remote_config == remote_config_instance
+        assert remote_config.driver_type == 'mock_driver'
+        assert remote_config.some_remote_setting == 'value'
+
+        # Check dev_config
+        assert dev_config == dev_config_instance
+        assert dev_config.some_device_setting == 'device_value'
+
+        # Check point_configs
+        assert len(point_configs) == 2
+        point_names = {pc.point_name for pc in point_configs}
+        units = {pc.unit for pc in point_configs}
+        assert point_names == {'temperature', 'humidity'}
+        assert units == {'C', '%'}
 class TestPlatformDriverAgentConfigureNewEquipment:
     """Tests for _configure_new_equipment."""
     # TODO wait for function to be fully finished
