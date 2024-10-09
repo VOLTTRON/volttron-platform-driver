@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import MagicMock, Mock, patch
 from datetime import datetime
+import gevent
 
 from volttron.utils import format_timestamp, get_aware_utc_now
 from platform_driver.agent import PlatformDriverAgent, PlatformDriverConfig, STATUS_BAD, RemoteConfig, DeviceConfig, \
@@ -665,25 +666,270 @@ class TestPDAUpdateEquipment:
         PDA.equipment_tree.points.assert_not_called()
         assert result == True
 
+class TestPDARemoveEquipment:
+    @pytest.fixture
+    def PDA(self):
+        PDA = PlatformDriverAgent()
+        PDA.equipment_tree = MagicMock()
+        PDA.poll_schedulers = {}
+        return PDA
 
-class TestPlatformDriverAgentRemoveEquipment:
-    """Tests for _remove_equipment."""
-    # TODO wait for function to be fully finished
-    pass
+    def test_remove_equipment_with_points(self, PDA):
+        config_name = 'equipment_with_points'
+        # Mock points associated with the equipment
+        point1 = MagicMock()
+        point1.identifier = 'point1'
+        point2 = MagicMock()
+        point2.identifier = 'point2'
+        PDA.equipment_tree.points.return_value = [point1, point2]
+
+        # Mock get_group to return group names
+        PDA.equipment_tree.get_group.side_effect = ['group1', 'group2']
+
+        # Mock poll schedulers
+        poll_scheduler1 = MagicMock()
+        poll_scheduler2 = MagicMock()
+        PDA.poll_schedulers = {'group1': poll_scheduler1, 'group2': poll_scheduler2}
+
+        PDA._remove_equipment(config_name, None, None)
+
+        PDA.equipment_tree.points.assert_called_once_with(config_name)
+        PDA.equipment_tree.get_group.assert_any_call('point1')
+        PDA.equipment_tree.get_group.assert_any_call('point2')
+        PDA.equipment_tree.remove_segment.assert_called_once_with(config_name)
+        poll_scheduler1.check_for_reschedule.assert_called_once()
+        poll_scheduler2.check_for_reschedule.assert_called_once()
+
+    def test_remove_equipment_no_points(self, PDA):
+        config_name = 'equipment_no_points'
+        # Mock no points associated with the equipment
+        PDA.equipment_tree.points.return_value = []
+
+        # Ensure get_group is not called
+        PDA.equipment_tree.get_group = MagicMock()
+
+        # Empty poll_schedulers dict
+        PDA.poll_schedulers = {}
+
+        PDA._remove_equipment(config_name, None, None)
+
+        PDA.equipment_tree.points.assert_called_once_with(config_name)
+        PDA.equipment_tree.get_group.assert_not_called()
+        PDA.equipment_tree.remove_segment.assert_called_once_with(config_name)
+
+class TestPDAStartAllPublishes:
+    @pytest.fixture
+    def PDA(self):
+        PDA = PlatformDriverAgent()
+        PDA.equipment_tree = MagicMock()
+        PDA.poll_schedulers = {}
+        PDA.publishers = {}
+        PDA.core = MagicMock()
+        return PDA
+
+    def test_start_all_publishes_no_devices(self, PDA):
+        # Mock devices method to return an empty list
+        PDA.equipment_tree.devices.return_value = []
+
+        PDA._start_all_publishes()
+
+        PDA.core.schedule.assert_not_called()
+
+    def test_start_all_publishes_device_no_interval(self, PDA):
+        # Mock a device without all_publish_interval
+        device = MagicMock()
+        device.identifier = 'device1'
+        device.all_publish_interval = None
+        PDA.equipment_tree.devices.return_value = [device]
+        # Mock publishing methods to return False
+        PDA.equipment_tree.is_published_all_depth.return_value = False
+        PDA.equipment_tree.is_published_all_breadth.return_value = False
+        # Mock poll_schedulers
+        poller = MagicMock()
+        poller.start_all_datetime = 100
+        PDA.poll_schedulers = {'poller1': poller}
+
+        PDA._start_all_publishes()
+
+        PDA.core.schedule.assert_not_called() # no scheduling was done
+
+    def test_start_all_publishes_device_not_published(self, PDA):
+        # Mock a device with all_publish_interval
+        device = MagicMock()
+        device.identifier = 'device1'
+        device.all_publish_interval = 60
+        PDA.equipment_tree.devices.return_value = [device]
+        # Mock publishing methods to return False
+        PDA.equipment_tree.is_published_all_depth.return_value = False
+        PDA.equipment_tree.is_published_all_breadth.return_value = False
+
+        PDA._start_all_publishes()
+
+        PDA.core.schedule.assert_not_called() # no scheduling was done
+
+    def test_start_all_publishes_device_published_depth(self, PDA):
+        # Mock a device with all_publish_interval
+        device = MagicMock()
+        device.identifier = 'device1'
+        device.all_publish_interval = 60
+        PDA.equipment_tree.devices.return_value = [device]
+        # Mock publishing methods
+        PDA.equipment_tree.is_published_all_depth.return_value = True
+        PDA.equipment_tree.is_published_all_breadth.return_value = False
+        # Mock poll_schedulers
+        poller = MagicMock()
+        poller.start_all_datetime = 100
+        PDA.poll_schedulers = {'poller1': poller}
+
+        PDA._start_all_publishes()
+
+        PDA.core.schedule.assert_called_once()
+        assert device in PDA.publishers
+
+    def test_start_all_publishes_device_published_breadth(self, PDA):
+        # Mock a device with all_publish_interval
+        device = MagicMock()
+        device.identifier = 'device2'
+        device.all_publish_interval = 120
+        PDA.equipment_tree.devices.return_value = [device]
+        # Mock publishing methods
+        PDA.equipment_tree.is_published_all_depth.return_value = False
+        PDA.equipment_tree.is_published_all_breadth.return_value = True
+        # Mock poll_schedulers
+        poller = MagicMock()
+        poller.start_all_datetime = 200
+        PDA.poll_schedulers = {'poller2': poller}
+
+        PDA._start_all_publishes()
+
+        PDA.core.schedule.assert_called_once()
+        assert device in PDA.publishers
+
+class TestPDAAllPublish:
+
+    @pytest.fixture
+    def PDA(self):
+        PDA = PlatformDriverAgent()
+        PDA.equipment_tree = MagicMock()
+        PDA.vip = MagicMock()
+        return PDA
+
+    def test_all_publish_device_not_ready(self, PDA):
+        node = MagicMock(identifier='device1')
+        PDA.equipment_tree.get_node.return_value = node
+        PDA.equipment_tree.is_ready.return_value = False
+
+        PDA._all_publish(node)
+
+        PDA.equipment_tree.is_ready.assert_called_once_with('device1')
+        PDA.vip.pubsub.publish.assert_not_called()
+
+    def test_all_publish_device_is_stale(self, PDA):
+        node = MagicMock(identifier='device2')
+        PDA.equipment_tree.get_node.return_value = node
+        PDA.equipment_tree.is_ready.return_value = True
+        PDA.equipment_tree.is_stale.return_value = True
+
+        PDA._all_publish(node)
+
+        PDA.equipment_tree.is_stale.assert_called_once_with('device2')
+        PDA.vip.pubsub.publish.assert_not_called()
+
+    @patch('platform_driver.agent.publish_wrapper')
+    @patch('platform_driver.agent.publication_headers')
+    def test_all_publish_published_all_depth(self, mock_publication_headers, mock_publish_wrapper, PDA):
+        node = MagicMock(identifier='device3')
+        PDA.equipment_tree.get_node.return_value = node
+        PDA.equipment_tree.is_ready.return_value = True
+        PDA.equipment_tree.is_stale.return_value = False
+        PDA.equipment_tree.is_published_all_depth.return_value = True
+        PDA.equipment_tree.get_device_topics.return_value = ('depth_topic', 'breadth_topic')
+        point = MagicMock(identifier='device3/point1', last_value=42, meta_data={'units': 'degC'})
+        PDA.equipment_tree.points.return_value = [point]
+        mock_publication_headers.return_value = {}
+
+        PDA._all_publish(node)
+
+        mock_publish_wrapper.assert_called_once_with(
+            PDA.vip, f'depth_topic/all', headers={}, message=[
+                {'point1': 42},
+                {'point1': {'units': 'degC'}}
+            ]
+        )
+
+    @patch('platform_driver.agent.publish_wrapper')
+    @patch('platform_driver.agent.publication_headers')
+    def test_all_publish_published_all_breadth(self, mock_publication_headers, mock_publish_wrapper, PDA):
+        node = MagicMock(identifier='device4')
+        PDA.equipment_tree.get_node.return_value = node
+        PDA.equipment_tree.is_ready.return_value = True
+        PDA.equipment_tree.is_stale.return_value = False
+        PDA.equipment_tree.is_published_all_depth.return_value = False
+        PDA.equipment_tree.is_published_all_breadth.return_value = True
+        PDA.equipment_tree.get_device_topics.return_value = ('depth_topic', 'breadth_topic')
+        point = MagicMock(identifier='device4/point1', last_value=100, meta_data={'units': 'kW'})
+        PDA.equipment_tree.points.return_value = [point]
+        mock_publication_headers.return_value = {}
+
+        PDA._all_publish(node)
+
+        mock_publish_wrapper.assert_called_once_with(
+            PDA.vip, f'breadth_topic/all', headers={}, message=[
+                {'point1': 100},
+                {'point1': {'units': 'kW'}}
+            ]
+        )
+
+    @patch('platform_driver.agent.publish_wrapper')
+    @patch('platform_driver.agent.publication_headers')
+    def test_all_publish_no_publishing(self, mock_publication_headers, mock_publish_wrapper, PDA):
+        node = MagicMock(identifier='device5')
+        PDA.equipment_tree.get_node.return_value = node
+        PDA.equipment_tree.is_ready.return_value = True
+        PDA.equipment_tree.is_stale.return_value = False
+        PDA.equipment_tree.is_published_all_depth.return_value = False
+        PDA.equipment_tree.is_published_all_breadth.return_value = False
+        PDA.equipment_tree.get_device_topics.return_value = ('depth_topic', 'breadth_topic')
+        mock_publication_headers.return_value = {}
+
+        PDA._all_publish(node)
+
+        mock_publish_wrapper.assert_not_called()
+
+class TestPDASemanticQuery:
+
+    @pytest.fixture
+    def PDA(self):
+        PDA = PlatformDriverAgent()
+        PDA.vip = MagicMock()
+        return PDA
+
+    def test_semantic_query_success(self, PDA):
+        query = {'some': 'query'}
+        expected_result = {'result': 'data'}
+        # Mock the RPC call to return expected_result
+        PDA.vip.rpc.call.return_value.get.return_value = expected_result
+
+        result = PDA.semantic_query(query)
+
+        PDA.vip.rpc.call.assert_called_once_with('platform.semantic', 'semantic_query', query)
+        PDA.vip.rpc.call.return_value.get.assert_called_once_with(timeout=5)
+        assert result == expected_result
+
+    def test_semantic_query_timeout(self, PDA, caplog):
+        query = {'some': 'query'}
+        # Mock the RPC call to raise gevent.Timeout
+        PDA.vip.rpc.call.return_value.get.side_effect = gevent.Timeout
+
+        result = PDA.semantic_query(query)
+
+        PDA.vip.rpc.call.assert_called_once_with('platform.semantic', 'semantic_query', query)
+        PDA.vip.rpc.call.return_value.get.assert_called_once_with(timeout=5)
+        assert result == {}
+        assert any("Semantic Interoperability Service timed out" in record.message for record in caplog.records)
 
 
-class TestPlatformDriverAgentSemanticQuery:
-    """Tests for resolve_tags"""
-    pass
-
-    # @pytest.fixture
-    # def PDA(self):
-    #     agent = PlatformDriverAgent()
-    #     agent.vip = MagicMock()
-    #     return agent
-
-
-class TestPlatformDriverAgentBuildQueryPlan:
+class TestPDABuildQueryPlan:
     """Tests for build_query_plan"""
 
     @pytest.fixture
