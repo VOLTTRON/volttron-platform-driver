@@ -104,7 +104,6 @@ class TestPDAConfigureMain:
             mock_setup_socket_lock.assert_called_once()
             mock_configure_publish_lock.assert_called_once()
 
-
 class TestPDASeparateEquipmentConfigs:
     @pytest.fixture
     def PDA(self):
@@ -115,6 +114,7 @@ class TestPDASeparateEquipmentConfigs:
         return PDA
 
     def test_separate_equipment_configs(self, PDA):
+        """Tests that the separate equipment configs work as expected, input config, output remote, dev, point"""
         # Mock the _get_configured_interface method to return a mock interface
         mock_interface = MagicMock()
         mock_interface.INTERFACE_CONFIG_CLASS = MagicMock()
@@ -177,22 +177,493 @@ class TestPDASeparateEquipmentConfigs:
         units = {pc.unit for pc in point_configs}
         assert point_names == {'temperature', 'humidity'}
         assert units == {'C', '%'}
-class TestPlatformDriverAgentConfigureNewEquipment:
-    """Tests for _configure_new_equipment."""
-    # TODO wait for function to be fully finished
-    pass
+
+class TestPDAConfigureNewEquipment:
+    @pytest.fixture
+    def PDA(self):
+        PDA = PlatformDriverAgent()
+        PDA.core = MagicMock()
+        PDA.vip = MagicMock()
+        PDA.vip.config.get = Mock(return_value='{}')
+
+        # Mock dependencies
+        PDA.equipment_tree = MagicMock()
+        PDA._update_equipment = MagicMock()
+        PDA._separate_equipment_configs = MagicMock()
+        PDA._get_or_create_remote = MagicMock()
+        PDA.poll_schedulers = {}
+        return PDA
+
+    def test_configure_new_equipment_existing_node_config_not_finished(self, PDA):
+        equipment_name = 'existing_equipment'
+        contents = {'some': 'contents'}
+
+        existing_node = MagicMock()
+        existing_node.config_finished = False
+        PDA.equipment_tree.get_node.return_value = existing_node
+
+        result = PDA._configure_new_equipment(equipment_name, None, contents)
+
+        assert existing_node.config_finished == True
+        assert result == False
+        PDA._update_equipment.assert_not_called()
+
+    def test_configure_new_equipment_existing_node_config_finished(self, PDA):
+        equipment_name = 'existing_equipment'
+        contents = {'some': 'contents'}
+
+        existing_node = MagicMock()
+        existing_node.config_finished = True
+        PDA.equipment_tree.get_node.return_value = existing_node
+
+        # Set up _update_equipment to return True
+        PDA._update_equipment.return_value = True
+
+        result = PDA._configure_new_equipment(equipment_name, None, contents)
+
+        PDA._update_equipment.assert_called_once_with(equipment_name, 'UPDATE', contents, True)
+        assert result == True
+
+    def test_configure_new_equipment_new_device_node(self, PDA):
+        equipment_name = 'new_device'
+        contents = {'some': 'contents'}
+
+        PDA.equipment_tree.get_node.return_value = None
+
+        # mock _separate_equipment_configs
+        remote_config = MagicMock()
+        dev_config = MagicMock()
+        dev_config.allow_duplicate_remotes = False
+        registry_config = MagicMock()
+        PDA._separate_equipment_configs.return_value = (remote_config, dev_config, registry_config)
+
+        # Mock _get_or_create_remote
+        driver = MagicMock()
+        PDA._get_or_create_remote.return_value = driver
+
+        # Mock equipment_tree.add_device
+        device_node = MagicMock()
+        PDA.equipment_tree.add_device.return_value = device_node
+
+        # Mock driver.add_equipment
+        driver.add_equipment = MagicMock()
+
+        # Mock get_group
+        PDA.equipment_tree.get_group.return_value = 'group1'
+        # Mock poll_schedulers
+        poll_scheduler = MagicMock()
+        PDA.poll_schedulers = {'group1': poll_scheduler}
+
+        result = PDA._configure_new_equipment(equipment_name, None, contents)
 
 
-class TestPlatformDriverAgentGetOrCreateRemote:
-    """Tests for _get_or_create_remote"""
-    # TODO wait for function to be fully finished
-    pass
+        PDA._separate_equipment_configs.assert_called_once_with(contents)
+        PDA._get_or_create_remote.assert_called_once_with(equipment_name, remote_config,
+                                                          dev_config.allow_duplicate_remotes)
+        PDA.equipment_tree.add_device.assert_called_once_with(
+            device_topic=equipment_name, dev_config=dev_config,
+            driver_agent=driver, registry_config=registry_config
+        )
+        driver.add_equipment.assert_called_once_with(device_node)
+        PDA.equipment_tree.get_group.assert_called_once_with(equipment_name)
+        poll_scheduler.schedule.assert_called_once()
+        assert result == True
 
+    def test_configure_new_equipment_new_segment_node(self, PDA):
+        equipment_name = 'new_segment'
+        contents = {'some': 'contents'}
 
-class TestPlatformDriverAgentUpdateEquipment:
-    """Tests for _update_equipment."""
-    # TODO wait for function to be fully finished
-    pass
+        PDA.equipment_tree.get_node.return_value = None
+
+        remote_config = MagicMock()
+        dev_config = None
+        registry_config = MagicMock()
+        PDA._separate_equipment_configs.return_value = (remote_config, dev_config, registry_config)
+
+        # Mock EquipmentConfig
+        with patch('platform_driver.agent.EquipmentConfig') as MockEquipmentConfig:
+            equipment_config_instance = MockEquipmentConfig.return_value
+
+            PDA.equipment_tree.add_segment = MagicMock()
+
+            PDA.equipment_tree.get_group.return_value = 'group1'
+            poll_scheduler = MagicMock()
+            PDA.poll_schedulers = {'group1': poll_scheduler}
+
+            result = PDA._configure_new_equipment(equipment_name, None, contents)
+
+            PDA._separate_equipment_configs.assert_called_once_with(contents)
+            MockEquipmentConfig.assert_called_once_with(**contents)
+            PDA.equipment_tree.add_segment.assert_called_once_with(equipment_name, equipment_config_instance)
+            PDA.equipment_tree.get_group.assert_called_once_with(equipment_name)
+            poll_scheduler.schedule.assert_called_once()
+            assert result == True
+
+    def test_configure_new_equipment_separate_equipment_configs_raises_value_error(self, PDA):
+        equipment_name = 'new_equipment'
+        contents = {'some': 'contents'}
+
+        PDA.equipment_tree.get_node.return_value = None
+
+        # Mock _separate_equipment_configs to raise ValueError
+        PDA._separate_equipment_configs.side_effect = ValueError('Invalid configuration')
+
+        # Mock logger
+        with patch('platform_driver.agent._log') as mock_log:
+            result = PDA._configure_new_equipment(equipment_name, None, contents)
+
+            # Assertions
+            PDA._separate_equipment_configs.assert_called_once_with(contents)
+            # Check that the warning was logged
+            mock_log.warning.assert_called_once_with(
+                f'Skipping configuration of equipment: {equipment_name} after encountering error --- Invalid configuration'
+            )
+            # Check that result is False
+            assert result == False
+
+class TestPDAGetOrCreateRemote:
+    @pytest.fixture
+    def PDA(self):
+        PDA = PlatformDriverAgent()
+        PDA.core = MagicMock()
+        PDA.vip = MagicMock()
+        PDA.vip.config.get = Mock(return_value='{}')
+
+        # Mock dependencies
+        PDA._get_configured_interface = MagicMock()
+        PDA.equipment_tree = MagicMock()
+        PDA.equipment_tree.remotes = {}
+        PDA.config = MagicMock()
+        PDA.config.allow_duplicate_remotes = False
+        PDA.scalability_test = MagicMock()
+        PDA.config.timezone = 'UTC'
+        PDA.vip = MagicMock()
+        return PDA
+
+    def test_get_or_create_remote_driver_exists(self, PDA):
+        equipment_name = 'equipment1'
+        remote_config = MagicMock()
+        allow_duplicate_remotes = False
+
+        # Mock interface and unique_remote_id
+        interface = MagicMock()
+        interface.unique_remote_id.return_value = 'unique_id_1'
+        PDA._get_configured_interface.return_value = interface
+
+        # Existing DriverAgent
+        existing_driver_agent = MagicMock()
+        PDA.equipment_tree.remotes['unique_id_1'] = existing_driver_agent
+
+        result = PDA._get_or_create_remote(equipment_name, remote_config, allow_duplicate_remotes)
+
+        PDA._get_configured_interface.assert_called_once_with(remote_config)
+        interface.unique_remote_id.assert_called_once_with(equipment_name, remote_config)
+        assert result == existing_driver_agent
+
+    def test_get_or_create_remote_driver_not_exists(self, PDA):
+        equipment_name = 'equipment2'
+        remote_config = MagicMock()
+        allow_duplicate_remotes = False
+
+        # Mock interface and unique_remote_id
+        interface = MagicMock()
+        interface.unique_remote_id.return_value = 'unique_id_2'
+        PDA._get_configured_interface.return_value = interface
+
+        # No existing DriverAgent
+        PDA.equipment_tree.remotes = {}
+
+        with patch('platform_driver.agent.DriverAgent') as MockDriverAgent:
+            driver_agent_instance = MockDriverAgent.return_value
+
+            # Call the method
+            result = PDA._get_or_create_remote(equipment_name, remote_config, allow_duplicate_remotes)
+
+            # Assertions
+            PDA._get_configured_interface.assert_called_once_with(remote_config)
+            interface.unique_remote_id.assert_called_once_with(equipment_name, remote_config)
+            MockDriverAgent.assert_called_once_with(
+                remote_config,
+                PDA.core,
+                PDA.equipment_tree,
+                PDA.scalability_test,
+                PDA.config.timezone,
+                'unique_id_2',
+                PDA.vip
+            )
+            # Check that the new driver agent is stored
+            assert PDA.equipment_tree.remotes['unique_id_2'] == driver_agent_instance
+            assert result == driver_agent_instance
+
+    def test_get_or_create_remote_allow_duplicate_remotes_true(self, PDA):
+        equipment_name = 'equipment3'
+        remote_config = MagicMock()
+        remote_config.driver_type = 'fake_driver'  # Set driver_type to a valid string
+        allow_duplicate_remotes = True
+
+        # Mock interface
+        interface = MagicMock()
+        PDA._get_configured_interface.return_value = interface
+
+        # Mock BaseInterface.unique_remote_id and get_interface_subclass
+        with patch('volttron.driver.base.interfaces.BaseInterface.unique_remote_id', return_value='unique_id_base'), \
+                patch('platform_driver.agent.DriverAgent') as MockDriverAgent, \
+                patch('volttron.driver.base.interfaces.BaseInterface.get_interface_subclass', return_value=MagicMock()):
+            # Call the method
+            result = PDA._get_or_create_remote(equipment_name, remote_config, allow_duplicate_remotes)
+
+            # Assertions
+            PDA._get_configured_interface.assert_called_once_with(remote_config)
+            interface.unique_remote_id.assert_not_called()  # Should not be called when duplicates are allowed
+            MockDriverAgent.assert_called_once_with(
+                remote_config,
+                PDA.core,
+                PDA.equipment_tree,
+                PDA.scalability_test,
+                PDA.config.timezone,
+                'unique_id_base',
+                PDA.vip
+            )
+            # Check that the new driver agent is stored
+            assert PDA.equipment_tree.remotes['unique_id_base'] == MockDriverAgent.return_value
+            assert result == MockDriverAgent.return_value
+
+    def test_get_or_create_remote_allow_duplicate_remotes_false_config_true(self, PDA):
+        equipment_name = 'equipment4'
+        remote_config = MagicMock()
+        remote_config.driver_type = 'fake_driver'  # Set driver_type to a valid string
+        allow_duplicate_remotes = False
+
+        # PDA.config.allow_duplicate_remotes is True
+        PDA.config.allow_duplicate_remotes = True
+
+        # Mock interface
+        interface = MagicMock()
+        PDA._get_configured_interface.return_value = interface
+
+        # Mock BaseInterface.unique_remote_id and get_interface_subclass
+        with patch('volttron.driver.base.interfaces.BaseInterface.unique_remote_id',
+                   return_value='unique_id_base_config_true'), \
+                patch('platform_driver.agent.DriverAgent') as MockDriverAgent, \
+                patch('volttron.driver.base.interfaces.BaseInterface.get_interface_subclass', return_value=MagicMock()):
+
+            result = PDA._get_or_create_remote(equipment_name, remote_config, allow_duplicate_remotes)
+
+            PDA._get_configured_interface.assert_called_once_with(remote_config)
+            interface.unique_remote_id.assert_not_called()  # Should not be called when duplicates are allowed
+            MockDriverAgent.assert_called_once_with(
+                remote_config,
+                PDA.core,
+                PDA.equipment_tree,
+                PDA.scalability_test,
+                PDA.config.timezone,
+                'unique_id_base_config_true',
+                PDA.vip
+            )
+            # Check that the new driver agent is stored
+            assert PDA.equipment_tree.remotes['unique_id_base_config_true'] == MockDriverAgent.return_value
+            assert result == MockDriverAgent.return_value
+
+class TestPDAGetConfiguredInterface:
+    @pytest.fixture
+    def PDA(self):
+        PDA = PlatformDriverAgent()
+        PDA.interface_classes = {}
+        return PDA
+
+    def test_get_configured_interface_cached(self, PDA):
+        remote_config = MagicMock()
+        remote_config.driver_type = 'driver_type_1'
+
+        # Mock cached interface
+        cached_interface = MagicMock()
+        PDA.interface_classes['driver_type_1'] = cached_interface
+
+        result = PDA._get_configured_interface(remote_config)
+
+        assert result == cached_interface
+
+    def test_get_configured_interface_not_cached_loads_successfully(self, PDA):
+        remote_config = MagicMock()
+        remote_config.driver_type = 'driver_type_2'
+        remote_config.module = 'module_2'
+
+        # No cached interface
+        PDA.interface_classes = {}
+
+        # Mock BaseInterface.get_interface_subclass
+        with patch('platform_driver.agent.BaseInterface.get_interface_subclass') as mock_get_interface_subclass:
+            loaded_interface = MagicMock()
+            mock_get_interface_subclass.return_value = loaded_interface
+
+            result = PDA._get_configured_interface(remote_config)
+
+            mock_get_interface_subclass.assert_called_once_with('driver_type_2', 'module_2')
+            # Check that the interface is cached
+            assert PDA.interface_classes['driver_type_2'] == loaded_interface
+            assert result == loaded_interface
+
+class TestPDAUpdateEquipment:
+    @pytest.fixture
+    def PDA(self):
+        PDA = PlatformDriverAgent()
+        PDA.equipment_tree = MagicMock()
+        PDA._separate_equipment_configs = MagicMock()
+        PDA._get_or_create_remote = MagicMock()
+        PDA.poll_schedulers = {}
+        return PDA
+
+    def test_update_equipment_device_config_present_update_successful(self, PDA):
+        config_name = 'equipment1'
+        contents = {'some': 'contents'}
+
+        # Mock _separate_equipment_configs
+        remote_config = MagicMock()
+        dev_config = MagicMock()
+        dev_config.allow_duplicate_remotes = False
+        registry_config = MagicMock()
+        PDA._separate_equipment_configs.return_value = (remote_config, dev_config, registry_config)
+
+        # Mock _get_or_create_remote
+        remote = MagicMock()
+        PDA._get_or_create_remote.return_value = remote
+
+        # Mock update_equipment
+        PDA.equipment_tree.update_equipment.return_value = True
+
+        # Mock points and poll_schedulers
+        point1 = MagicMock()
+        point1.identifier = 'point1'
+        point2 = MagicMock()
+        point2.identifier = 'point2'
+        PDA.equipment_tree.points.return_value = [point1, point2]
+        PDA.equipment_tree.get_group.side_effect = ['group1', 'group2']
+        poll_scheduler1 = MagicMock()
+        poll_scheduler2 = MagicMock()
+        PDA.poll_schedulers = {'group1': poll_scheduler1, 'group2': poll_scheduler2}
+
+        result = PDA._update_equipment(config_name, None, contents)
+
+        PDA._separate_equipment_configs.assert_called_once_with(contents)
+        PDA._get_or_create_remote.assert_called_once_with(config_name, remote_config, dev_config.allow_duplicate_remotes)
+        PDA.equipment_tree.update_equipment.assert_called_once_with(config_name, dev_config, remote, registry_config)
+        PDA.equipment_tree.points.assert_called_once_with(config_name)
+        PDA.equipment_tree.get_group.assert_any_call('point1')
+        PDA.equipment_tree.get_group.assert_any_call('point2')
+        poll_scheduler1.check_for_reschedule.assert_called_once()
+        poll_scheduler2.check_for_reschedule.assert_called_once()
+        assert result == True
+
+    def test_update_equipment_device_config_present_update_not_needed(self, PDA):
+        config_name = 'equipment2'
+        contents = {'some': 'contents'}
+
+        # Mock _separate_equipment_configs
+        remote_config = MagicMock()
+        dev_config = MagicMock()
+        dev_config.allow_duplicate_remotes = False
+        registry_config = MagicMock()
+        PDA._separate_equipment_configs.return_value = (remote_config, dev_config, registry_config)
+
+        # Mock _get_or_create_remote
+        remote = MagicMock()
+        PDA._get_or_create_remote.return_value = remote
+
+        # Mock update_equipment
+        PDA.equipment_tree.update_equipment.return_value = False
+
+        result = PDA._update_equipment(config_name, None, contents)
+
+        PDA._separate_equipment_configs.assert_called_once_with(contents)
+        PDA._get_or_create_remote.assert_called_once_with(config_name, remote_config, dev_config.allow_duplicate_remotes)
+        PDA.equipment_tree.update_equipment.assert_called_once_with(config_name, dev_config, remote, registry_config)
+        # Polling should not be rescheduled
+        PDA.equipment_tree.points.assert_not_called()
+        assert result == False
+
+    def test_update_equipment_device_config_absent(self, PDA):
+        config_name = 'equipment3'
+        contents = {'some': 'contents'}
+
+        # Mock _separate_equipment_configs
+        remote_config = MagicMock()
+        dev_config = None  # Device config absent
+        registry_config = MagicMock()
+        PDA._separate_equipment_configs.return_value = (remote_config, dev_config, registry_config)
+
+        # Mock update_equipment
+        PDA.equipment_tree.update_equipment.return_value = True
+
+        # Mock points and poll_schedulers
+        point1 = MagicMock()
+        point1.identifier = 'point1'
+        PDA.equipment_tree.points.return_value = [point1]
+        PDA.equipment_tree.get_group.return_value = 'group1'
+        poll_scheduler1 = MagicMock()
+        PDA.poll_schedulers = {'group1': poll_scheduler1}
+
+        result = PDA._update_equipment(config_name, None, contents)
+
+        PDA._separate_equipment_configs.assert_called_once_with(contents)
+        PDA._get_or_create_remote.assert_not_called()
+        PDA.equipment_tree.update_equipment.assert_called_once_with(config_name, dev_config, None, registry_config)
+        PDA.equipment_tree.points.assert_called_once_with(config_name)
+        PDA.equipment_tree.get_group.assert_called_once_with('point1')
+        poll_scheduler1.check_for_reschedule.assert_called_once()
+        assert result == True
+
+    def test_update_equipment_exception_during_remote_creation(self, PDA):
+        config_name = 'equipment4'
+        contents = {'some': 'contents'}
+
+        # Mock _separate_equipment_configs
+        remote_config = MagicMock()
+        dev_config = MagicMock()
+        dev_config.allow_duplicate_remotes = False
+        registry_config = MagicMock()
+        PDA._separate_equipment_configs.return_value = (remote_config, dev_config, registry_config)
+
+        PDA._get_or_create_remote.side_effect = ValueError('Error message')
+
+        with patch('platform_driver.agent._log') as mock_log:
+
+            result = PDA._update_equipment(config_name, None, contents)
+
+            PDA._separate_equipment_configs.assert_called_once_with(contents)
+            PDA._get_or_create_remote.assert_called_once_with(config_name, remote_config, dev_config.allow_duplicate_remotes)
+            PDA.equipment_tree.update_equipment.assert_not_called()
+            mock_log.warning.assert_called_once_with(
+                f'Skipping configuration of equipment: {config_name} after encountering error --- Error message'
+            )
+            assert result == False
+
+    def test_update_equipment_allow_reschedule_false(self, PDA):
+        config_name = 'equipment5'
+        contents = {'some': 'contents'}
+
+        # Mock _separate_equipment_configs
+        remote_config = MagicMock()
+        dev_config = MagicMock()
+        dev_config.allow_duplicate_remotes = False
+        registry_config = MagicMock()
+        PDA._separate_equipment_configs.return_value = (remote_config, dev_config, registry_config)
+
+        # Mock _get_or_create_remote
+        remote = MagicMock()
+        PDA._get_or_create_remote.return_value = remote
+
+        # Mock update_equipment
+        PDA.equipment_tree.update_equipment.return_value = True
+
+        # Call the method with allow_reschedule=False
+        result = PDA._update_equipment(config_name, None, contents, allow_reschedule=False)
+
+        PDA._separate_equipment_configs.assert_called_once_with(contents)
+        PDA._get_or_create_remote.assert_called_once_with(config_name, remote_config, dev_config.allow_duplicate_remotes)
+        PDA.equipment_tree.update_equipment.assert_called_once_with(config_name, dev_config, remote, registry_config)
+        # Polling should not be rescheduled
+        PDA.equipment_tree.points.assert_not_called()
+        assert result == True
 
 
 class TestPlatformDriverAgentRemoveEquipment:
