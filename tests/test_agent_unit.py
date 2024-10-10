@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, Mock, patch, call
 from datetime import datetime
 import gevent
 from typing import Set, Dict
@@ -1117,7 +1117,7 @@ class TestPDAUnderscoreGet:
 
     def test_get_success(self, PDA):
         """Test that _get successfully retrieves and processes data from remotes."""
-        # Arrange
+        
         remote = MagicMock(spec=DriverAgent)
         point1 = MagicMock(spec=PointNode)
         point1.identifier = 'topic1'
@@ -1153,7 +1153,7 @@ class TestPDAUnderscoreGet:
 
     def test_get_with_errors(self, PDA):
         """Test that _get correctly captures errors returned by remotes."""
-        # Arrange
+        
         remote = MagicMock(spec=DriverAgent)
         point1 = MagicMock(spec=PointNode)
         point1.identifier = 'topic1'
@@ -1434,10 +1434,282 @@ class TestPDASemanticSet:
         assert errors == expected_errors
 
 
-class TestPlatformDriverAgentRevert:
-    """Tests for revert"""
-    pass    # TODO wait for final additions
+class TestPlatformDriverAgentRevertMethods:
+    @pytest.fixture
+    def pda(self):
+        """
+        Fixture to create a PlatformDriverAgent instance with mocked dependencies.
+        """
+        pda = PlatformDriverAgent()
+        pda.build_query_plan = MagicMock()
+        pda.semantic_query = MagicMock()
+        return pda
 
+    # -------------------------
+    # Tests for the 'revert' method
+    # -------------------------
+
+    def test_revert_with_single_topic_no_errors(self, pda, mocker):
+        """Test the 'revert' method with a single topic and no errors during revert"""
+        topic = 'topic1'
+        regex = None
+
+        remote1 = MagicMock(spec=DriverAgent)
+        point1 = MagicMock(spec=PointNode, identifier='point1')
+
+        expected_query_plan = {remote1: {point1}}
+
+        # Mock build_query_plan to return the expected_query_plan
+        pda.build_query_plan.return_value = expected_query_plan
+
+        # Mock the _revert static method to return no errors
+        mock_revert = mocker.patch.object(PlatformDriverAgent, '_revert', return_value={})
+
+        errors = pda.revert(topic=topic, regex=regex)
+
+        pda.build_query_plan.assert_called_once_with(topic, regex)
+        mock_revert.assert_called_once_with(expected_query_plan)
+        assert errors == {}
+        mock_revert.stop()  # stop the patch to avoid side effects
+
+    def test_revert_with_multiple_topics_with_errors(self, pda, mocker):
+        """Test the 'revert' method with multiple topics and some errors during revert."""
+        topics = ['topic1', 'topic2']
+        regex = None
+
+        # Create mock DriverAgents and PointNodes
+        remote1 = MagicMock(spec=DriverAgent)
+        remote2 = MagicMock(spec=DriverAgent)
+        point1 = MagicMock(spec=PointNode, identifier='point1')
+        point2 = MagicMock(spec=PointNode, identifier='point2')
+
+        expected_query_plan = {
+            remote1: {point1},
+            remote2: {point2}
+        }
+
+        # Mock build_query_plan to return the expected_query_plan
+        pda.build_query_plan.return_value = expected_query_plan
+
+        # Mock the _revert static method to simulate an error on remote2
+        mock_revert = mocker.patch.object(PlatformDriverAgent, '_revert', return_value={'point2': 'Revert failed'})
+
+        errors = pda.revert(topic=topics, regex=regex)
+
+        pda.build_query_plan.assert_called_once_with(topics, regex)
+        mock_revert.assert_called_once_with(expected_query_plan)
+        assert errors == {'point2': 'Revert failed'}
+        mock_revert.stop()
+
+    def test_revert_with_no_matches(self, pda, mocker):
+        """Test the 'revert' method when no matches are found in build_query_plan"""
+
+        topic = 'nonexistent_topic'
+        regex = None
+        expected_query_plan = {}
+
+        # Mock build_query_plan to return empty query_plan
+        pda.build_query_plan.return_value = expected_query_plan
+
+        # Mock the _revert static method to return no errors
+        mock_revert = mocker.patch.object(PlatformDriverAgent, '_revert', return_value={})
+        errors = pda.revert(topic=topic, regex=regex)
+
+        pda.build_query_plan.assert_called_once_with(topic, regex)
+        mock_revert.assert_called_once_with(expected_query_plan)
+        assert errors == {}
+        mock_revert.stop()
+
+    # -------------------------
+    # Tests for the 'semantic_revert' method
+    # -------------------------
+
+    def test_semantic_revert_with_valid_query_no_errors(self, pda, mocker):
+        """Test the 'semantic_revert' method with a valid semantic query and no errors during revert."""
+
+        query = "temperature sensors"
+
+        # Create mock DriverAgent and PointNode
+        remote1 = MagicMock(spec=DriverAgent)
+        point1 = MagicMock(spec=PointNode, identifier='point1')
+
+        expected_exact_matches = {remote1: {point1}}
+        expected_query_plan = expected_exact_matches
+
+        # Mock semantic_query to return exact_matches
+        pda.semantic_query.return_value = expected_exact_matches
+
+        # Mock build_query_plan to return the expected_query_plan
+        pda.build_query_plan.return_value = expected_query_plan
+
+        # Mock the _revert static method to return no errors
+        mock_revert = mocker.patch.object(PlatformDriverAgent, '_revert', return_value={})
+
+        errors = pda.semantic_revert(query=query)
+
+        pda.semantic_query.assert_called_once_with(query)
+        pda.build_query_plan.assert_called_once_with(expected_exact_matches)
+        mock_revert.assert_called_once_with(expected_query_plan)
+        assert errors == {}
+        mock_revert.stop()
+
+    def test_semantic_revert_with_no_matches(self, pda, mocker):
+        """Test the 'semantic_revert' method when semantic_query returns no matches."""
+
+        query = "unknown devices"
+        expected_exact_matches = {}
+        expected_query_plan = {}
+
+        # Mock semantic_query to return no matches
+        pda.semantic_query.return_value = expected_exact_matches
+
+        # Mock build_query_plan to return empty query_plan
+        pda.build_query_plan.return_value = expected_query_plan
+
+        # Mock the _revert static method to return no errors
+        mock_revert = mocker.patch.object(PlatformDriverAgent, '_revert', return_value={})
+
+        errors = pda.semantic_revert(query=query)
+
+        pda.semantic_query.assert_called_once_with(query)
+        pda.build_query_plan.assert_called_once_with(expected_exact_matches)
+        mock_revert.assert_called_once_with(expected_query_plan)
+        assert errors == {}
+        mock_revert.stop()
+
+    def test_semantic_revert_with_revert_errors(self, pda, mocker):
+        """Test the 'semantic_revert' method when some revert operations fail."""
+
+        query = "humidity sensors"
+
+        # Create mock DriverAgent and PointNodes
+        remote1 = MagicMock(spec=DriverAgent)
+        point1 = MagicMock(spec=PointNode, identifier='point1')
+        point2 = MagicMock(spec=PointNode, identifier='point2')
+
+        expected_exact_matches = {remote1: {point1, point2}}
+        expected_query_plan = expected_exact_matches
+
+        # Mock semantic_query to return exact_matches
+        pda.semantic_query.return_value = expected_exact_matches
+
+        # Mock build_query_plan to return the expected_query_plan
+        pda.build_query_plan.return_value = expected_query_plan
+
+        # Mock the _revert static method to simulate an error on point2
+        mock_revert = mocker.patch.object(PlatformDriverAgent, '_revert', return_value={'point2': 'Revert failed'})
+
+        errors = pda.semantic_revert(query=query)
+
+        pda.semantic_query.assert_called_once_with(query)
+        pda.build_query_plan.assert_called_once_with(expected_exact_matches)
+        mock_revert.assert_called_once_with(expected_query_plan)
+        assert errors == {'point2': 'Revert failed'}
+        mock_revert.stop()
+
+    # -------------------------
+    # Tests for the '_revert' static method
+    # -------------------------
+
+    def test__revert_all_success(self):
+        """Test the '_revert' method when all revert operations succeed."""
+
+        remote1 = MagicMock(spec=DriverAgent)
+        remote2 = MagicMock(spec=DriverAgent)
+        point1 = MagicMock(spec=PointNode, identifier='point1')
+        point2 = MagicMock(spec=PointNode, identifier='point2')
+        query_plan = {
+            remote1: {point1},
+            remote2: {point2}
+        }
+
+        # Mock revert_point to not raise any exceptions
+        remote1.revert_point.return_value = None
+        remote2.revert_point.return_value = None
+
+        errors = PlatformDriverAgent._revert(query_plan)
+
+        remote1.revert_point.assert_called_once_with('point1')
+        remote2.revert_point.assert_called_once_with('point2')
+        assert errors == {}
+
+    def test__revert_with_some_failures(self):
+        """Test the '_revert' method when some revert operations fail"""
+
+        remote1 = MagicMock(spec=DriverAgent)
+        remote2 = MagicMock(spec=DriverAgent)
+        point1 = MagicMock(spec=PointNode, identifier='point1')
+        point2 = MagicMock(spec=PointNode, identifier='point2')
+        point3 = MagicMock(spec=PointNode, identifier='point3')
+        query_plan = {
+            remote1: {point1, point2},
+            remote2: {point3}
+        }
+
+        # Define side effect functions based on identifier
+        def remote1_revert_point_side_effect(identifier):
+            if identifier == 'point1':
+                return None
+            elif identifier == 'point2':
+                raise Exception("Revert failed for point2")
+
+        def remote2_revert_point_side_effect(identifier):
+            if identifier == 'point3':
+                raise Exception("Revert failed for point3")
+
+        remote1.revert_point.side_effect = remote1_revert_point_side_effect
+        remote2.revert_point.side_effect = remote2_revert_point_side_effect
+
+        # Act
+        errors = PlatformDriverAgent._revert(query_plan)
+
+        # Assert
+        expected_errors = {
+            'point2': 'Revert failed for point2',
+            'point3': 'Revert failed for point3'
+        }
+        assert errors == expected_errors
+
+    def test__revert_with_empty_query_plan(self):
+        """Test the '_revert' method with an empty query_plan"""
+        query_plan = {}
+        errors = PlatformDriverAgent._revert(query_plan)
+        assert errors == {}
+
+    def test__revert_with_multiple_remotes_and_points(self):
+        """Test the '_revert' method with multiple remotes and multiple points."""
+
+        remote1 = MagicMock(spec=DriverAgent)
+        remote2 = MagicMock(spec=DriverAgent)
+        point1 = MagicMock(spec=PointNode, identifier='point1')
+        point2 = MagicMock(spec=PointNode, identifier='point2')
+        point3 = MagicMock(spec=PointNode, identifier='point3')
+        point4 = MagicMock(spec=PointNode, identifier='point4')
+        query_plan = {
+            remote1: {point1, point2},
+            remote2: {point3, point4}
+        }
+
+        # Define side effect functions based on identifier
+        def remote1_revert_point_side_effect(identifier):
+            if identifier in ['point1', 'point2']:
+                return None
+
+        def remote2_revert_point_side_effect(identifier):
+            if identifier == 'point3':
+                raise Exception("Failed to revert point3")
+            elif identifier == 'point4':
+                return None
+
+        remote1.revert_point.side_effect = remote1_revert_point_side_effect
+        remote2.revert_point.side_effect = remote2_revert_point_side_effect
+
+        errors = PlatformDriverAgent._revert(query_plan)
+
+        expected_errors = {
+            'point3': 'Failed to revert point3'
+        }
+        assert errors == expected_errors
 
 class TestPlatformDriverAgentLast:
     """Tests for Last"""
@@ -2374,65 +2646,84 @@ class TestEquipmentId:
 
 
 class TestGetHeaders:
-    """Tests for _get_headers in the PlatformDriverAgent class."""
+
     now = get_aware_utc_now()
 
     def test_get_headers_no_optional(self):
-        """Tests _get_headers with time as now"""
+        """Test _get_headers with only requester and current time provided."""
         formatted_now = format_timestamp(self.now)
         result = PlatformDriverAgent()._get_headers(requester="test_requester", time=self.now)
-        assert result == {'time': formatted_now, 'requesterID': "test_requester", 'type': None}
+        expected = {
+            'time': formatted_now,
+            'requesterID': "test_requester",
+            'type': None
+        }
+        assert result == expected
 
     def test_get_headers_with_time(self):
+        """Test _get_headers with a custom time provided."""
         custom_time = datetime(2024, 7, 25, 18, 52, 29, 37938)
         formatted_custom_time = format_timestamp(custom_time)
         result = PlatformDriverAgent()._get_headers("test_requester", time=custom_time)
-        assert result == {
+        expected = {
             'time': formatted_custom_time,
             'requesterID': "test_requester",
             'type': None
         }
+        assert result == expected
 
     def test_get_headers_with_task_id(self):
+        """Test _get_headers with a task ID provided."""
         task_id = "task123"
         formatted_now = format_timestamp(self.now)
-        result = PlatformDriverAgent()._get_headers(requester="test_requester",
-                                                    time=self.now,
-                                                    task_id=task_id)
-        assert result == {
+        result = PlatformDriverAgent()._get_headers(
+            requester="test_requester",
+            time=self.now,
+            task_id=task_id
+        )
+        expected = {
             'time': formatted_now,
             'requesterID': "test_requester",
             'taskID': task_id,
             'type': None
         }
+        assert result == expected
 
     def test_get_headers_with_action_type(self):
+        """Test _get_headers with an action type provided."""
         action_type = "NEW_SCHEDULE"
         formatted_now = format_timestamp(self.now)
-        result = PlatformDriverAgent()._get_headers(requester="test_requester",
-                                                    time=self.now,
-                                                    action_type=action_type)
-        assert result == {
+        result = PlatformDriverAgent()._get_headers(
+            requester="test_requester",
+            time=self.now,
+            action_type=action_type
+        )
+        expected = {
             'time': formatted_now,
             'requesterID': "test_requester",
             'type': action_type
         }
+        assert result == expected
 
     def test_get_headers_all_optional(self):
+        """Test _get_headers with all optional parameters provided."""
         custom_time = datetime(2024, 7, 25, 18, 52, 29, 37938)
         formatted_custom_time = format_timestamp(custom_time)
         task_id = "task123"
         action_type = "NEW_SCHEDULE"
-        result = PlatformDriverAgent()._get_headers(requester="test_requester",
-                                                    time=custom_time,
-                                                    task_id=task_id,
-                                                    action_type=action_type)
-        assert result == {
+        result = PlatformDriverAgent()._get_headers(
+            requester="test_requester",
+            time=custom_time,
+            task_id=task_id,
+            action_type=action_type
+        )
+        expected = {
             'time': formatted_custom_time,
             'requesterID': "test_requester",
             'taskID': task_id,
             'type': action_type
         }
+        assert result == expected
 
 
 if __name__ == '__main__':
