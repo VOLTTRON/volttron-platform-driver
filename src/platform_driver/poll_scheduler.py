@@ -6,7 +6,7 @@ import logging
 from collections import defaultdict
 from datetime import datetime, timedelta
 from math import floor, gcd, lcm
-from weakref import WeakKeyDictionary, WeakValueDictionary, WeakSet
+from weakref import WeakKeyDictionary, WeakValueDictionary
 
 from volttron.client.vip.agent.core import ScheduledEvent
 from volttron.utils import get_aware_utc_now

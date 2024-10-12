@@ -1,8 +1,6 @@
 import logging
 from datetime import timedelta
-from pydantic import BaseModel, computed_field, ConfigDict, Field, field_validator, model_validator
-
-import logging
+from pydantic import BaseModel, computed_field, ConfigDict, Field, model_validator
 
 
 _log = logging.getLogger()
