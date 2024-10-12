@@ -288,26 +288,36 @@ class PlatformDriverAgent(Agent):
         else:
             remote = None
         is_changed = self.equipment_tree.update_equipment(config_name, dev_config, remote, registry_config)
-        if allow_reschedule and is_changed:
-            poll_schedulers = []
-            for point in self.equipment_tree.points(config_name):
-                group = self.equipment_tree.get_group(point.identifier)
-                poll_schedulers.append(self.poll_schedulers.get(group))
-            for poll_scheduler in poll_schedulers:
-                poll_scheduler.check_for_reschedule()
+        # TODO: Add reschedule_all_on_update option and reschedule all poll_schedulers when true.
+        if is_changed:
+            points = self.equipment_tree.points(config_name)
+            self._update_polling_schedules(points)
         return is_changed
 
-    def _remove_equipment(self, config_name: str, _, __):
+    def _update_polling_schedules(self, points):
+        reschedules_required, new_groups = [], []
+        for point in points:
+            if PollScheduler.add_to_schedule(point, self.equipment_tree):
+                group = self.equipment_tree.get_group(point.identifier)
+                reschedules_required.append(group)
+                if group not in self.poll_schedulers:
+                    new_groups.append(group)
+        self.poll_schedulers.update(PollScheduler.create_poll_schedulers(self.equipment_tree, self.config.groups,
+                                                                         new_groups, len(self.poll_schedulers)))
+        for updated_group in reschedules_required:
+            self.poll_schedulers[updated_group].schedule()
+
+    def _remove_equipment(self, config_name: str, _, __, leave_disconnected=False) -> bool:
         """Callback to remove equipment configuration."""
         poll_schedulers = []
         for point in self.equipment_tree.points(config_name):
             group = self.equipment_tree.get_group(point.identifier)
             poll_schedulers.append(self.poll_schedulers.get(group))
-        self.equipment_tree.remove_segment(config_name)
+        removed_count = self.equipment_tree.remove_segment(config_name, leave_disconnected)
         # TODO: Implement override handling.
         # self._update_override_state(config_name, 'remove')
-        for poll_scheduler in poll_schedulers:
-            poll_scheduler.check_for_reschedule()
+        # TODO: Add reschedule_all_on_update option and reschedule all poll_schedulers when true.
+        return True if removed_count > 0 else False
 
     def _start_all_publishes(self):
         # TODO: Can we just schedule and let the stale property work its magic?

@@ -5,6 +5,7 @@ import logging
 
 from collections import defaultdict
 from datetime import datetime, timedelta
+from functools import reduce
 from math import floor, gcd, lcm
 from weakref import WeakKeyDictionary, WeakValueDictionary
 
@@ -39,19 +40,22 @@ class PollScheduler:
         Sort points from each of the remote's EquipmentNodes by interval:
             Build cls.interval_dict  as: {group: {remote: {interval: WeakSet(points)}}}}
         """
-        cls.build_interval_dict(data_model)
-        poll_schedulers = cls._create_poll_schedulers(data_model, group_configs)
+        cls._build_interval_dict(data_model)
+        poll_schedulers = cls.create_poll_schedulers(data_model, group_configs)
         return poll_schedulers
 
     @classmethod
-    def _create_poll_schedulers(cls, data_model, group_configs):
+    def create_poll_schedulers(cls, data_model: EquipmentTree, group_configs,
+                               specific_groups: list[str] = None, existing_group_count: int = 0):
         poll_schedulers = {}
-        for i, group in enumerate(cls.interval_dicts):
+        groups = specific_groups if specific_groups else cls.interval_dicts
+        for i, group in enumerate(groups):
             group_config = group_configs.get(group)
             if group_config is None:
                 # Create a config for the group with default settings and mimic the old offset multiplier behavior.
                 group_config: GroupConfig = GroupConfig()
-                group_config.start_offset = group_config.start_offset * i
+                # TODO: Should start_offset instead be either a default offset * i or the specified start_offset if it is there?
+                group_config.start_offset = group_config.start_offset * (i + existing_group_count)
                 group_configs[group] = group_config  # Add this new config back to the agent settings.
                 # TODO: Save the agent settings afterwards so this group gets the same config next time?
             poll_scheduler_module = importlib.import_module(group_config.poll_scheduler_module)
@@ -60,47 +64,46 @@ class PollScheduler:
         return poll_schedulers
 
     @classmethod
-    def build_interval_dict(cls, data_model: EquipmentTree):
+    def _build_interval_dict(cls, data_model: EquipmentTree):
         for remote in data_model.remotes.values():
-            interval_dict = defaultdict(lambda: defaultdict(WeakSet))
+            interval_dict = defaultdict(lambda: defaultdict(dict))
             groups = set()
             for point in remote.point_set:
                 if data_model.is_active(point.identifier):
                     group = data_model.get_group(point.identifier)
                     interval = data_model.get_polling_interval(point.identifier)
-                    interval_dict[group][interval].add(point)
+                    if 'points' not in interval_dict[group][interval]:
+                        interval_dict[group][interval]['points'] = WeakValueDictionary()
+                    interval_dict[group][interval]['points'][point.identifier] = point
+                    # noinspection PyTypeChecker
+                    if 'publish_setup' not in interval_dict[group][interval]:
+                        interval_dict[group][interval]['publish_setup'] = cls._setup_publish(point, data_model, None)
+                    cls._setup_publish(point, data_model, interval_dict[group][interval]['publish_setup'])
                     groups.add(group)
 
             for group in groups:
-                # TODO: Was there a reason this isn't just assigned this way three lines above?
+                # Remote level is assigned separately because we don't have the option for a default-WeakKeyDictionary.
                 cls.interval_dicts[group][remote] = interval_dict[group]
 
-    def _setup_publish(self, points, publish_setup=None):
+    @classmethod
+    def _setup_publish(cls, point: PointNode, data_model: EquipmentTree, publish_setup: dict = None):
         if publish_setup is None:
             publish_setup = {
                 'single_depth': set(),
                 'single_breadth': set(),
                 'multi_depth': defaultdict(set),
-                'multi_breadth': defaultdict(set) #,
-                # 'all_depth': set(),
-                # 'all_breadth': set()
+                'multi_breadth': defaultdict(set)
             }
-        for p in points:
-            point_depth, point_breadth = self.data_model.get_point_topics(p.identifier)
-            device_depth, device_breadth = self.data_model.get_device_topics(p.identifier)
-            if self.data_model.is_published_single_depth(p.identifier):
-                publish_setup['single_depth'].add(point_depth)
-            if self.data_model.is_published_single_breadth(p.identifier):
-                publish_setup['single_breadth'].add((point_depth, point_breadth))
-            if self.data_model.is_published_multi_depth(p.identifier):
-                publish_setup['multi_depth'][device_depth].add(point_depth)
-            if self.data_model.is_published_multi_breadth(p.identifier):
-                publish_setup['multi_breadth'][device_breadth].add(p.identifier)
-            # TODO: Uncomment if we are going to allow all-publishes on every poll.
-            # if self.data_model.is_published_all_depth(device.identifier):
-            #     publish_setup['all_depth'].add(device.identifier)
-            # if self.data_model.is_published_all_breadth(device.identifier):
-            #     publish_setup['all_breadth'].add(self.data_model.get_device_topics(p.identifier))
+        point_depth, point_breadth = data_model.get_point_topics(point.identifier)
+        device_depth, device_breadth = data_model.get_device_topics(point.identifier)
+        if data_model.is_published_single_depth(point.identifier):
+            publish_setup['single_depth'].add(point_depth)
+        if data_model.is_published_single_breadth(point.identifier):
+            publish_setup['single_breadth'].add((point_depth, point_breadth))
+        if data_model.is_published_multi_depth(point.identifier):
+            publish_setup['multi_depth'][device_depth].add(point_depth)
+        if data_model.is_published_multi_breadth(point.identifier):
+            publish_setup['multi_breadth'][device_breadth].add(point.identifier)
         return publish_setup
 
     @staticmethod
@@ -114,20 +117,36 @@ class PollScheduler:
         next_from_midnight = seconds_from_midnight - offset + interval
         return midnight + next_from_midnight + group_delay
 
-    @abc.abstractmethod
-    def add_to_schedule(self, point):
-        # Add a poll to the schedule, without complete rescheduling if possible.
-        pass
+    @classmethod
+    def add_to_schedule(cls, point: PointNode, data_model: EquipmentTree):
+        """Add a poll to the schedule, without complete rescheduling if possible."""
+        group = data_model.get_group(point.identifier)
+        remote = data_model.get_remote(point.identifier)
+        interval = data_model.get_polling_interval(point.identifier)
+        reschedule_required = (group not in cls.interval_dicts
+                               or remote not in cls.interval_dicts[group]
+                               or interval not in cls.interval_dicts[group][remote])
+        cls.interval_dicts[group][remote][interval][point.identifier] = point
+        return reschedule_required
 
-    @abc.abstractmethod
-    def check_for_reschedule(self):
-        # Check whether it is necessary to reschedule after a change.
-        pass
+    @classmethod
+    def remove_from_schedule(cls, point: PointNode, data_model: EquipmentTree):
+        """Remove a poll from the schedule without rescheduling."""
+        group = data_model.get_group(point.identifier)
+        remote = data_model.get_remote(point.identifier)
+        interval = data_model.get_polling_interval(point.identifier)
+        success = cls.interval_dicts[group][remote][interval].pop(point.identifier, None)
+        cls._prune_interval_dict(group, interval, remote)
+        return True if success else False
 
-    @abc.abstractmethod
-    def remove_from_schedule(self, point):
-        # Remove a poll from the schedule without rescheduling.
-        pass
+    @classmethod
+    def _prune_interval_dict(cls, group, interval, remote):
+        if not cls.interval_dicts[group][remote][interval]:
+            cls.interval_dicts[group][remote].pop('interval')
+            if not cls.interval_dicts[group][remote]:
+                cls.interval_dicts[group].pop(remote)
+                if not cls.interval_dicts[group]:
+                    cls.interval_dicts.pop(group)
 
     @abc.abstractmethod
     def _prepare_to_schedule(self):
@@ -147,21 +166,6 @@ class StaticCyclicPollScheduler(PollScheduler):
         super(StaticCyclicPollScheduler, self).__init__(*args, **kwargs)
         # Poll sets has: {remote: {hyperperiod: {slot: WeakSet(points)}}}
         self.poll_sets = []
-
-    def add_to_schedule(self, point):
-        # TODO: Implement add_to_schedule.
-        pass
-
-    def check_for_reschedule(self):
-        # TODO: Implement check_for_reschedule.
-        pass
-
-    def remove_from_schedule(self, point):
-        # TODO: Implement remove_from_schedule.
-        pass
-        # OLD DRIVER HAD THIS:
-        # bisect.insort(self.freed_time_slots[driver.group], driver.time_slot)
-        # self.group_counts[driver.group] -= 1
 
     def get_schedule(self):
         """Return the calculated schedules to the user."""
@@ -222,17 +226,23 @@ class StaticCyclicPollScheduler(PollScheduler):
                                      for i in range(s_count) for r, remote in enumerate(input_dict[interval].keys())]:
                     plan = slot_plan[timedelta(seconds=hyperperiod)][timedelta(seconds=slot)]
                     if not plan.get('points'):
-                        plan['points'] = WeakValueDictionary()
+                        plan['points'] = []
+                    if not plan.get('publish_setup'):
+                        plan['publish_setup'] = []
                     plan['remote'] = remote
-                    plan['points'].update({p.identifier: p for p in input_dict[interval][remote]})
-                    plan['publish_setup'] = self._setup_publish(input_dict[interval][remote], plan.get('publish_setup'))
+                    plan['points'].extend([x['points'] for x in input_dict[interval][remote]])
+                    plan['publish_setup'].extend([x['publish_setup'] for x in input_dict[interval][remote]])
         return {hyperperiod: dict(sorted(sp.items())) for hyperperiod, sp in slot_plan.items()}
 
     @staticmethod
     def get_poll_generator(hyperperiod_start, hyperperiod, slot_plan):
         def get_polls(start_time):
-            return ((start_time + k, v['points'], v['publish_setup'], v['remote']) for k, v in slot_plan.items())
-
+            # Union of points and publish_setups is here to get any changes to the interval_dict at start of hyperperiod.
+            return ((start_time + k,
+                     reduce(lambda d1, d2: d1 | d2, v['points']),
+                     reduce(lambda d1, d2: d1 | d2, v['publish_setup']),
+                     v['remote']
+                     ) for k, v in slot_plan.items())
         polls = get_polls(hyperperiod_start)
         while True:
             try:
@@ -247,21 +257,23 @@ class StaticCyclicPollScheduler(PollScheduler):
         interval_dicts = self.interval_dicts[self.group]
         if self.group_config.parallel_subgroups:
             for parallel_index, (remote, interval_dict) in enumerate(interval_dicts.items()):
-                input_dict = defaultdict(lambda: defaultdict(WeakSet))
-                for interval, point_set in interval_dict.items():
-                    input_dict[interval][remote] = point_set
+                input_dict = defaultdict(lambda: defaultdict(list))
+                for interval, point_set in interval_dict.items():  # TODO: point_set is a bad name. This is now a dict of dicts: {'points' {}, 'publish_setup': {}}
+                    input_dict[interval][remote].append(point_set)
                 self.poll_sets.append(self._find_slots(input_dict, parallel_index))
         else:
-            input_dict = defaultdict(lambda: defaultdict(WeakSet))
+            input_dict = defaultdict(lambda: defaultdict(list))
             for remote, interval_dict in interval_dicts.items():
                 for interval, point_set in interval_dict.items():
-                    input_dict[interval][remote] |= point_set
+                    input_dict[interval][remote].append(point_set)
             self.poll_sets.append(self._find_slots(input_dict))
 
     def _schedule_polling(self):
         # TODO: How to fully ensure min_polling_interval? Nothing yet prevents collisions between individual polls in
         #  separate schedules. Is it worth keeping these apart if it requires a check for each slot at schedule time?
         #  Or, create global lock oscillating at min_poll_interval - check on poll for the next allowed start time?
+        _log.debug('In _schedule_polling, poll sets is: ')
+        _log.debug(self.poll_sets)
         for poll_set in self.poll_sets:
             for hyperperiod, slot_plan in poll_set.items():
                 initial_start = self.find_starting_datetime(get_aware_utc_now(), hyperperiod,
@@ -308,21 +320,6 @@ class SerialPollScheduler(PollScheduler):
         self.sleep_duration = sleep_duration
 
         self.status = {}
-
-    def add_to_schedule(self, point):
-        # TODO: Implement add_to_schedule.
-        pass
-
-    def check_for_reschedule(self):
-        # TODO: Implement check_for_reschedule.
-        pass
-
-    def remove_from_schedule(self, point):
-        # TODO: Implement remove_from_schedule.
-        pass
-        # OLD DRIVER HAD THIS:
-        # bisect.insort(self.freed_time_slots[driver.group], driver.time_slot)
-        # self.group_counts[driver.group] -= 1
 
     # TODO: Serial Poll Scheduler (schedule a single job to poll each item of poll set after the return or failure
     #  of the previous):
