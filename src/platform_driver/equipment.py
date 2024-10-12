@@ -155,11 +155,7 @@ class DeviceNode(EquipmentNode):
 
     def stop_device(self):
         _log.info(f"Stopping driver: {self.identifier}")
-        try:
-            self.remote.core.stop(timeout=5.0)
-        except Exception as e:
-            _log.error(f"Failure during {self.identifier} driver shutdown: {e}")
-
+        # TODO: This previously stopped the DriverAgent. Do we need to check if any polling instances need stopped?
 
 class PointNode(EquipmentNode):
     def __init__(self, config, *args, **kwargs):
