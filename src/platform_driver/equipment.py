@@ -11,9 +11,9 @@ from volttron.driver.base.driver import DriverAgent
 from volttron.driver.base.config import DataSource, DeviceConfig, EquipmentConfig, PointConfig
 from volttron.utils import get_aware_utc_now, parse_json_config
 
-from .overrides import OverrideError
-from .reservations import ReservationLockError
-from .topic_tree import TopicNode, TopicTree
+from platform_driver.overrides import OverrideError
+from platform_driver.reservations import ReservationLockError
+from platform_driver.topic_tree import TopicNode, TopicTree
 
 
 _log = logging.getLogger(__name__)

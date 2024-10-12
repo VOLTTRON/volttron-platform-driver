@@ -50,13 +50,13 @@ from volttron.utils import format_timestamp, get_aware_utc_now, load_config, vip
 from volttron.utils.jsonrpc import RemoteError
 from volttron.utils.scheduling import periodic
 
-from .config import PlatformDriverConfig
-from .constants import *
-from .equipment import EquipmentTree, PointNode
-from .overrides import OverrideManager
-from .poll_scheduler import PollScheduler
-from .reservations import ReservationManager
-from .scalability_testing import ScalabilityTester
+from platform_driver.config import PlatformDriverConfig
+from platform_driver.constants import *
+from platform_driver.equipment import EquipmentTree, PointNode
+from platform_driver.overrides import OverrideManager
+from platform_driver.poll_scheduler import PollScheduler
+from platform_driver.reservations import ReservationManager
+from platform_driver.scalability_testing import ScalabilityTester
 
 setup_logging()
 _log = logging.getLogger(__name__)

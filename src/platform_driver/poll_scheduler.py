@@ -11,8 +11,8 @@ from weakref import WeakKeyDictionary, WeakValueDictionary, WeakSet
 from volttron.client.vip.agent.core import ScheduledEvent
 from volttron.utils import get_aware_utc_now
 
-from .config import GroupConfig
-from .equipment import EquipmentTree
+from platform_driver.config import GroupConfig
+from platform_driver.equipment import EquipmentTree, PointNode
 
 
 _log = logging.getLogger(__name__)
