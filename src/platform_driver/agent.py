@@ -205,6 +205,7 @@ class PlatformDriverAgent(Agent):
             # Make remote_config correct subclass of RemoteConfig.
             remote_config = interface.INTERFACE_CONFIG_CLASS(**remote_config.model_dump())
             registry_config = config_dict.pop('registry_config', [])
+            registry_config = registry_config if registry_config is not None else []
             dev_config = DeviceConfig(**config_dict)
 
             point_configs = []
@@ -409,6 +410,7 @@ class PlatformDriverAgent(Agent):
         """Set selected points on each remote"""
         results, errors = {}, {}
         for (remote, point_set) in query_plan.items():
+            # TODO: When map_points is True, all topics are sent to all remotes. This is probably wrong.
             point_value_tuples = list(value.items()) if map_points else [(p.identifier, value) for p in point_set]
             query_return_errors = remote.set_multiple_points(point_value_tuples)
             errors.update(query_return_errors)

@@ -297,7 +297,7 @@ class EquipmentTree(TopicTree):
                 new_register = remote.interface.create_register(point_config)
                 remote.interface.insert_register(new_register, nid)
                 changes = True
-            existing_points.remove(point_id)
+                existing_points.remove(point_id)
         for removed in existing_points:
             self.remove_segment(removed)
             changes = True
@@ -337,7 +337,7 @@ class EquipmentTree(TopicTree):
         node = self.get_node(nid)
         if node.is_device:
             node.stop_device()
-        elif node.is_point():
+        elif node.is_point:
             self.get_remote(nid).interface.point_map.pop(nid)
         if leave_disconnected and self.has_concrete_successors(nid):
             # TODO: This may leave behind points which have no Device. Replace Fake Driver Interface with static points?

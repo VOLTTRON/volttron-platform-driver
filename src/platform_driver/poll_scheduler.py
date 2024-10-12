@@ -19,7 +19,7 @@ _log = logging.getLogger(__name__)
 
 
 class PollScheduler:
-    interval_dicts: dict[str, WeakKeyDictionary] = defaultdict(WeakKeyDictionary)  # Class variable TODO: Needed?
+    interval_dicts: dict[str, WeakKeyDictionary] = defaultdict(WeakKeyDictionary)
 
     def __init__(self, data_model: EquipmentTree, group: str, group_config: GroupConfig, **kwargs):
         self.data_model: EquipmentTree = data_model
@@ -107,7 +107,7 @@ class PollScheduler:
     def find_starting_datetime(now: datetime, interval: timedelta, group_delay: timedelta = None):
         group_delay = timedelta(seconds=0.0) if not isinstance(group_delay, timedelta) else group_delay
         midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        seconds_from_midnight = (now - midnight)  # .total_seconds()
+        seconds_from_midnight = (now - midnight)
         offset = seconds_from_midnight % interval
         if not offset:
             return now + interval + group_delay
@@ -286,8 +286,13 @@ class StaticCyclicPollScheduler(PollScheduler):
             next_start, next_points, next_publish_setup, next_remote = next(poll_generator)
 
         # Schedule next poll:
-        self.pollers[poller_id] = next_remote.core.schedule(next_start, self._operate_polling, poller_id, poll_generator,
-                                                            next_points, next_publish_setup, next_remote)
+        if next_points:
+            self.pollers[poller_id] = next_remote.core.schedule(next_start, self._operate_polling, poller_id,
+                                                                poll_generator, next_points, next_publish_setup,
+                                                                next_remote)
+        else:
+            _log.info(f'Stopping polling loop of {poller_id} points on {next_remote.unique_id}.'
+                      f' There are no points in this request set to poll.')
         current_remote.poll_data(current_points, current_publish_setup)
 
 
