@@ -228,7 +228,7 @@ class PlatformDriverAgent(Agent):
                 existing_node.config_finished = True
                 return False
             else:
-                return self._update_equipment(equipment_name, 'UPDATE', contents, schedule_now)
+                return self._update_equipment(equipment_name, 'UPDATE', contents)
         try:
             remote_config, dev_config, registry_config = self._separate_equipment_configs(contents)
             if dev_config:
