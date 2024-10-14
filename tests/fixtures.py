@@ -4,18 +4,10 @@ import pathlib
 import pytest
 
 from volttron.driver.base.interfaces import BaseInterface
-#from volttron.services.driver.data_structures import RemoteTree
 from volttron.driver.base.driver import DriverAgent  # TODO: This should import real DriverAgent from base driver and/or a better mock?
 from platform_driver.agent import PlatformDriverAgent
 from volttron.types.server_config import ServerConfig
 
-
-@pytest.fixture
-def remote_tree():
-    config_file = pathlib.Path(__file__).parent.parent.absolute() / 'sample_configs/remote_grouping.json'
-    with open(config_file) as f:
-        config = json.load(f)
-        return RemoteTree(config)
 
 @pytest.fixture
 def driver_agent():

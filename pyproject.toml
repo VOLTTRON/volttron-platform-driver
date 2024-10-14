@@ -34,7 +34,6 @@ classifiers = [
 include = ["volttron-platform-driver-*-default-vip-id"]
 
 [tool.poetry.dependencies]
-pydantic = ">=2"
 python = ">=3.10,<4.0"
 treelib = ">=1.7.0"
 volttron-core = ">=2.0.0rc0"
