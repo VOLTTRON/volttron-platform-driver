@@ -11,9 +11,9 @@ from volttron.driver.base.driver import DriverAgent
 from volttron.driver.base.config import DataSource, DeviceConfig, EquipmentConfig, PointConfig
 from volttron.utils import get_aware_utc_now, parse_json_config
 
-from .overrides import OverrideError
-from .reservations import ReservationLockError
-from .topic_tree import TopicNode, TopicTree
+from platform_driver.overrides import OverrideError
+from platform_driver.reservations import ReservationLockError
+from platform_driver.topic_tree import TopicNode, TopicTree
 
 
 _log = logging.getLogger(__name__)
@@ -155,11 +155,7 @@ class DeviceNode(EquipmentNode):
 
     def stop_device(self):
         _log.info(f"Stopping driver: {self.identifier}")
-        try:
-            self.remote.core.stop(timeout=5.0)
-        except Exception as e:
-            _log.error(f"Failure during {self.identifier} driver shutdown: {e}")
-
+        # TODO: This previously stopped the DriverAgent. Do we need to check if any polling instances need stopped?
 
 class PointNode(EquipmentNode):
     def __init__(self, config, *args, **kwargs):
@@ -301,7 +297,7 @@ class EquipmentTree(TopicTree):
                 new_register = remote.interface.create_register(point_config)
                 remote.interface.insert_register(new_register, nid)
                 changes = True
-            existing_points.remove(point_id)
+                existing_points.remove(point_id)
         for removed in existing_points:
             self.remove_segment(removed)
             changes = True
@@ -341,7 +337,7 @@ class EquipmentTree(TopicTree):
         node = self.get_node(nid)
         if node.is_device:
             node.stop_device()
-        elif node.is_point():
+        elif node.is_point:
             self.get_remote(nid).interface.point_map.pop(nid)
         if leave_disconnected and self.has_concrete_successors(nid):
             # TODO: This may leave behind points which have no Device. Replace Fake Driver Interface with static points?
@@ -373,14 +369,11 @@ class EquipmentTree(TopicTree):
         return (p for p in self.find_leaves(topic_pattern, regex, exact_matches) if p.is_point)
 
     def raise_on_locks(self, node: EquipmentNode, requester: str):
-        try:
-            reserved = next(self.rsearch(node.identifier, lambda n: n.reserved))
-        except StopIteration:
-            reserved = None
-        if reserved and not node.identifier == reserved:
+        reserved_by = self.agent.reservation_manager.reserved_by(node.identifier, requester)
+        if reserved_by and reserved_by != requester:
             raise ReservationLockError(f"Equipment {node.identifier} is reserved by another party."
                                        f" ({requester}) does not have permission to write at this time.")
-        elif not reserved and any(self.rsearch(node.identifier, lambda n: n.reservation_required_for_write)):
+        elif not reserved_by and any(self.rsearch(node.identifier, lambda n: n.reservation_required_for_write)):
             raise ReservationLockError(f'Caller ({requester}) does not have a reservation '
                                        f'for equipment {node.identifier}. A reservation is required to write.')
         elif any(self.rsearch(node.identifier, lambda n: n.overridden)):

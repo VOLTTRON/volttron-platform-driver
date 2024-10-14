@@ -82,11 +82,11 @@ class TestPollSchedulerSetupPart1:
         Test that the setup method correctly populates interval_dicts based on the data model.
         """
         # Ensure interval_dicts is reset before the test
-        StaticCyclicPollScheduler.interval_dicts = defaultdict(lambda: defaultdict(WeakSet))
+        StaticCyclicPollScheduler.poll_sets = defaultdict(lambda: defaultdict(WeakSet))
 
         StaticCyclicPollScheduler.setup(mock_data_model, {})
 
-        interval_dicts = StaticCyclicPollScheduler.interval_dicts
+        interval_dicts = StaticCyclicPollScheduler.poll_sets
 
         # Ensure group1 and group2 are created
         assert 'group1' in interval_dicts
@@ -126,7 +126,7 @@ class TestPollSchedulerSetupPart2:
     def test_poll_scheduler_creation(self, mock_getattr, mock_import_module, mock_data_model, group_configs):
         """Test that the setup method correctly creates poll_schedulers using imported modules and classes"""
         # Reset interval_dicts for testing
-        StaticCyclicPollScheduler.interval_dicts = {
+        StaticCyclicPollScheduler.poll_sets = {
             'group1': {
                 'remote1': {60: 'points1'}
             },
@@ -160,7 +160,7 @@ class TestPollSchedulerSetupPart2:
         """
         Test that a default GroupConfig is created when one is missing from group_configs.
         """
-        StaticCyclicPollScheduler.interval_dicts = {
+        StaticCyclicPollScheduler.poll_sets = {
             'group1': {
                 'remote1': {60: 'points1'}
             },
@@ -211,7 +211,7 @@ def test_static_cyclic_poll_scheduler_init():
 
     scheduler = StaticCyclicPollScheduler(data_model, group, group_config)
 
-    assert scheduler.poll_sets == []
+    assert scheduler.slot_plans == []
     assert isinstance(scheduler, PollScheduler)
 
 def test_calculate_hyperperiod():
@@ -501,7 +501,7 @@ class TestPollSchedulerSchedulePolling:
             group_config=group_config
         )
 
-        scheduler_instance.poll_sets = []
+        scheduler_instance.slot_plans = []
         scheduler_instance.pollers = {}
 
         scheduler_instance.start_all_datetime = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
@@ -533,7 +533,7 @@ class TestPollSchedulerSchedulePolling:
                 'remote': scheduler.data_model.remotes['remote1']
             }
         }
-        scheduler.poll_sets = [{
+        scheduler.slot_plans = [{
             hyperperiod: plan
         }]
 
@@ -595,7 +595,7 @@ class TestGetSchedule:
             group_config=mocked_group_config
         )
 
-        scps.poll_sets = []
+        scps.slot_plans = []
 
         return scps
 
@@ -609,7 +609,7 @@ class TestGetSchedule:
         remote = MagicMock()
         remote.unique_id = "remote1"
 
-        scpc.poll_sets.append({
+        scpc.slot_plans.append({
             hyperperiod: {
                 slot: {
                     'remote': remote,
@@ -774,7 +774,7 @@ class TestStaticCyclicPollSchedulerPrepareToSchedule:
         """Test _prepare_to_schedule when parallel_subgroups is False."""
         point1 = MagicMock()
         point2 = MagicMock()
-        scheduler.interval_dicts = {'test_group': {
+        scheduler.poll_sets = {'test_group': {
             'remote1': {
                 'interval1': WeakSet([point1]),
                 'interval2': WeakSet([point2]),
@@ -791,7 +791,7 @@ class TestStaticCyclicPollSchedulerPrepareToSchedule:
 
     def test_prepare_to_schedule_parallel(self, scheduler):
         """Test _prepare_to_schedule when parallel_subgroups is True."""
-        scheduler.interval_dicts = {'test_group': {
+        scheduler.poll_sets = {'test_group': {
             'remote1': {
                 'interval1': WeakSet([MagicMock()]),
             },
@@ -805,7 +805,7 @@ class TestStaticCyclicPollSchedulerPrepareToSchedule:
 
         # ensure _find_slots is called twice, once per remote
         assert scheduler._find_slots.call_count == 2
-        assert len(scheduler.poll_sets) == 2
+        assert len(scheduler.slot_plans) == 2
 
 if __name__ == '__main__':
     pytest.main()

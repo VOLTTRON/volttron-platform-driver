@@ -1,8 +1,6 @@
 import logging
 from datetime import timedelta
-from pydantic import BaseModel, computed_field, ConfigDict, Field, field_validator, model_validator
-
-import logging
+from pydantic import BaseModel, computed_field, ConfigDict, Field, model_validator
 
 
 _log = logging.getLogger()
@@ -29,7 +27,6 @@ class PlatformDriverConfig(BaseModel):
     model_config = ConfigDict(validate_assignment=True, populate_by_name=True)
     allow_duplicate_remotes: bool = False
     allow_no_lock_write: bool = True  # Deprecated.
-    allow_reschedule: bool = True
     # TODO: Is there a better default for breadth_first_base besides "devices" or "points",
     #  since point names are still keys in the dict? Maybe just "breadth" or something?
     #  This will actually be organized (in all/multi) as device/building/campus: {point1: val1, point2: val2}

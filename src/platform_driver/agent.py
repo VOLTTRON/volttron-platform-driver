@@ -50,13 +50,13 @@ from volttron.utils import format_timestamp, get_aware_utc_now, load_config, vip
 from volttron.utils.jsonrpc import RemoteError
 from volttron.utils.scheduling import periodic
 
-from .config import PlatformDriverConfig
-from .constants import *
-from .equipment import EquipmentTree, PointNode
-from .overrides import OverrideManager
-from .poll_scheduler import PollScheduler
-from .reservations import ReservationManager
-from .scalability_testing import ScalabilityTester
+from platform_driver.config import PlatformDriverConfig
+from platform_driver.constants import *
+from platform_driver.equipment import EquipmentTree, PointNode
+from platform_driver.overrides import OverrideManager
+from platform_driver.poll_scheduler import PollScheduler
+from platform_driver.reservations import ReservationManager
+from platform_driver.scalability_testing import ScalabilityTester
 
 setup_logging()
 _log = logging.getLogger(__name__)
@@ -205,6 +205,7 @@ class PlatformDriverAgent(Agent):
             # Make remote_config correct subclass of RemoteConfig.
             remote_config = interface.INTERFACE_CONFIG_CLASS(**remote_config.model_dump())
             registry_config = config_dict.pop('registry_config', [])
+            registry_config = registry_config if registry_config is not None else []
             dev_config = DeviceConfig(**config_dict)
 
             point_configs = []
@@ -240,8 +241,8 @@ class PlatformDriverAgent(Agent):
                 equipment_config = EquipmentConfig(**contents)
                 self.equipment_tree.add_segment(equipment_name, equipment_config)
             if schedule_now:
-                group = self.equipment_tree.get_group(equipment_name)
-                self.poll_schedulers[group].schedule()
+                points = self.equipment_tree.points(equipment_name)
+                self._update_polling_schedules(points)
             return True
         except ValueError as e:
             _log.warning(f'Skipping configuration of equipment: {equipment_name} after encountering error --- {e}')
@@ -275,7 +276,7 @@ class PlatformDriverAgent(Agent):
             self.interface_classes[remote_config.driver_type] = interface
         return interface
 
-    def _update_equipment(self, config_name: str, _, contents: dict, allow_reschedule=True) -> bool:
+    def _update_equipment(self, config_name: str, _, contents: dict) -> bool:
         """Callback for updating equipment configuration."""
         remote_config, dev_config, registry_config = self._separate_equipment_configs(contents)
         if dev_config:
@@ -287,26 +288,35 @@ class PlatformDriverAgent(Agent):
         else:
             remote = None
         is_changed = self.equipment_tree.update_equipment(config_name, dev_config, remote, registry_config)
-        if allow_reschedule and is_changed:
-            poll_schedulers = []
-            for point in self.equipment_tree.points(config_name):
-                group = self.equipment_tree.get_group(point.identifier)
-                poll_schedulers.append(self.poll_schedulers.get(group))
-            for poll_scheduler in poll_schedulers:
-                poll_scheduler.check_for_reschedule()
+        if is_changed:
+            points = self.equipment_tree.points(config_name)
+            self._update_polling_schedules(points)
         return is_changed
 
-    def _remove_equipment(self, config_name: str, _, __):
+    def _update_polling_schedules(self, points):
+        reschedules_required, new_groups = [], []
+        for point in points:
+            if PollScheduler.add_to_schedule(point, self.equipment_tree):
+                group = self.equipment_tree.get_group(point.identifier)
+                reschedules_required.append(group)
+                if group not in self.poll_schedulers:
+                    new_groups.append(group)
+        self.poll_schedulers.update(PollScheduler.create_poll_schedulers(self.equipment_tree, self.config.groups,
+                                                                         new_groups, len(self.poll_schedulers)))
+        for updated_group in reschedules_required:
+            self.poll_schedulers[updated_group].schedule()
+
+    def _remove_equipment(self, config_name: str, _, __, leave_disconnected=False) -> bool:
         """Callback to remove equipment configuration."""
         poll_schedulers = []
         for point in self.equipment_tree.points(config_name):
             group = self.equipment_tree.get_group(point.identifier)
             poll_schedulers.append(self.poll_schedulers.get(group))
-        self.equipment_tree.remove_segment(config_name)
+        removed_count = self.equipment_tree.remove_segment(config_name, leave_disconnected)
         # TODO: Implement override handling.
         # self._update_override_state(config_name, 'remove')
-        for poll_scheduler in poll_schedulers:
-            poll_scheduler.check_for_reschedule()
+        # TODO: Add reschedule_all_on_update option and reschedule all poll_schedulers when true.
+        return True if removed_count > 0 else False
 
     def _start_all_publishes(self):
         # TODO: Can we just schedule and let the stale property work its magic?
@@ -409,6 +419,7 @@ class PlatformDriverAgent(Agent):
         """Set selected points on each remote"""
         results, errors = {}, {}
         for (remote, point_set) in query_plan.items():
+            # TODO: When map_points is True, all topics are sent to all remotes. This is probably wrong.
             point_value_tuples = list(value.items()) if map_points else [(p.identifier, value) for p in point_set]
             query_return_errors = remote.set_multiple_points(point_value_tuples)
             errors.update(query_return_errors)
@@ -485,17 +496,16 @@ class PlatformDriverAgent(Agent):
         self._start(points)
 
     def _start(self, points: Iterable[PointNode]) -> None:
-        raise NotImplementedError('start is not yet implemented.')
-        # for p in points:
-        #     if p.active:
-        #         return
-        #     else:
-        #         p.active = True
-        #         group = self.equipment_tree.get_group(p.identifier)
-        #         if self.config.allow_reschedule:
-        #             self.poll_schedulers[group].schedule()
-        #         else:
-        #             self.poll_schedulers[group].add_to_schedule(p)
+        updates_required = []
+        for p in points:
+            if p.active:
+                return
+            else:
+                p.active = True
+                updates_required.append(p)
+    # TODO: Add reschedule_all_on_update option and reschedule all poll_schedulers when true.
+        if updates_required:
+            self._update_polling_schedules(updates_required)
 
     @RPC.export
     def stop(self, topic: str | Sequence[str] | Set[str] = None, regex: str = None) -> None:
@@ -509,17 +519,14 @@ class PlatformDriverAgent(Agent):
         self._stop(points)
 
     def _stop(self, points: Iterable[PointNode]) -> None:
-        raise NotImplementedError('stop is not yet implemented.')
-        # for p in points:
-        #     if not p.active:
-        #         return
-        #     else:
-        #         p.active = False
-        #         group = self.equipment_tree.get_group(p.identifier)
-        #         if self.config.allow_reschedule:
-        #             self.poll_schedulers[group].schedule()
-        #         else:
-        #             self.poll_schedulers[group].remove_from_schedule(p)
+        for p in points:
+            if not p.active:
+                return
+            else:
+                p.active = False
+                group = self.equipment_tree.get_group(p.identifier)
+                self.poll_schedulers[group].remove_from_schedule(p)
+        # TODO: Add reschedule_all_on_update option and reschedule all poll_schedulers when true.
 
     @RPC.export
     def enable(self, topic: str | Sequence[str] | Set[str] = None, regex: str = None) -> None:
@@ -533,14 +540,13 @@ class PlatformDriverAgent(Agent):
         self._enable(points)
 
     def _enable(self, nodes: Iterable[PointNode]):
-        raise NotImplementedError('enable is not yet implemented.')
-        # for node in nodes:
-        #     node.config.active = True
-        #     if not node.is_point:
-        #         # TODO: Make sure this doesn't trigger UPDATE.
-        #         self.vip.config.set(node.topic, node.config, trigger_callback=False)
-        #     else:
-        #         self.equipment_tree.update_stored_registry_config(node.identifier)
+        for node in nodes:
+            node.config.active = True
+            if not node.is_point:
+                # TODO: Make sure this doesn't trigger UPDATE.
+                self.vip.config.set(node.topic, node.config.model_dump(), trigger_callback=False)
+            else:
+                self.equipment_tree.update_stored_registry_config(node.identifier)
 
     @RPC.export
     def disable(self, topic: str | Sequence[str] | Set[str] = None, regex: str = None) -> None:
@@ -554,13 +560,12 @@ class PlatformDriverAgent(Agent):
         self._disable(points)
 
     def _disable(self, nodes: Iterable[PointNode]) -> None:
-        raise NotImplementedError('disable is not yet implemented.')
-        # for node in nodes:
-        #     node.config.active = False
-        #     if not node.is_point:
-        #         self.vip.config.set(node.topic, node.config, trigger_callback=False)
-        #     else:
-        #         self.equipment_tree.update_stored_registry_config(node.identifier)
+        for node in nodes:
+            node.config.active = False
+            if not node.is_point:
+                self.vip.config.set(node.topic, node.config.model_dump(), trigger_callback=False)
+            else:
+                self.equipment_tree.update_stored_registry_config(node.identifier)
 
     @RPC.export
     def status(self, topic: str | Sequence[str] | Set[str] = None, regex: str = None) -> dict:
@@ -580,13 +585,12 @@ class PlatformDriverAgent(Agent):
 
     @RPC.export
     def add_node(self, node_topic: str, config: dict, update_schedule: bool = True) -> bool:
-        raise NotImplementedError('add_node is not yet implemented.')
-        # return self._configure_new_equipment(node_topic, 'NEW', contents=config, schedule_now=update_schedule)
+        # TODO: Need logic to determine if this is a point. Configure_new_equipment should not be used if it is.
+        return self._configure_new_equipment(node_topic, 'NEW', contents=config, schedule_now=update_schedule)
 
     @RPC.export
     def remove_node(self, node_topic: str, leave_disconnected: bool = False) -> bool:
-        raise NotImplementedError('remove_node is not yet implemented.')
-        # return True if self.equipment_tree.remove_segment(node_topic, leave_disconnected) > 0 else False
+        return self._remove_equipment(node_topic, None, None, leave_disconnected)
 
     @RPC.export
     def add_interface(self, interface_name: str, local_path: str = None) -> bool:
@@ -606,6 +610,7 @@ class PlatformDriverAgent(Agent):
     @RPC.export
     def list_interfaces(self) -> list[str]:
         """Return list of all installed driver interfaces."""
+        # TODO: Needs to be updated to use poetry.
         try:
             from volttron.driver import interfaces
             return [i.name for i in iter_modules(interfaces.__path__)]
@@ -614,6 +619,7 @@ class PlatformDriverAgent(Agent):
 
     @RPC.export
     def remove_interface(self, interface_name: str) -> bool:
+        # TODO: Needs to be updated to use poetry.
         interface_package = self._interface_package_from_short_name(interface_name)
         sp_result = subprocess.run([sys.executable, '-m', 'pip', 'uninstall', interface_package])
         return False if sp_result.returncode else True
@@ -1029,7 +1035,7 @@ class PlatformDriverAgent(Agent):
             The return values are described in `New Task Response`_.
         """
         raise NotImplementedError('request_new_schedule is not yet implemented.')
-        # _log.info('Call to deprecated RPC method "request_new_schedule. '
+        # _log.info('Call to deprecated RPC method "request_new_schedule". '
         #            'This method provides compatability with the actuator API, but has been superseded '
         #            'by "new_reservation". Please update to the newer method.')
         # rpc_peer = self.vip.rpc.context.vip_message.peer
@@ -1055,7 +1061,7 @@ class PlatformDriverAgent(Agent):
 
         """
         raise NotImplementedError('request_cancel_schedule is not yet implemented.')
-        # _log.info('Call to deprecated RPC method "request_cancel_schedule. '
+        # _log.info('Call to deprecated RPC method "request_cancel_schedule". '
         #            'This method provides compatability with the actuator API, but has been superseded '
         #            'by "cancel_reservation". Please update to the newer method.')
         # rpc_peer = self.vip.rpc.context.vip_message.peer

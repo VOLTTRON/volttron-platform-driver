@@ -2,8 +2,8 @@ import json
 import pathlib
 import pytest
 
-from volttron.services.driver.data_structures import RemoteTree, DeviceNode, EquipmentTree, EquipmentNode, PointNode
-from volttron.services.driver.platform_driver_service import DriverAgent
+from platform_driver.equipment import DeviceNode, EquipmentTree, EquipmentNode, PointNode
+from volttron.driver.base.driver import DriverAgent
 
 SAMPLE_REGISTRY = [{'Point Name': 'EKG', 'Volttron Point Name': 'EKG', 'Units': 'waveform', 'Units Details': 'waveform', 'Writable': 'TRUE', 'Starting Value': 'sin', 'Type': 'float', 'Notes': 'Sine wavefor baseline output'},
 {'Point Name': 'Heartbeat', 'Volttron Point Name': 'Heartbeat', 'Units': 'On/Off', 'Units Details': 'On/Off', 'Writable': 'TRUE', 'Starting Value': '0', 'Type': 'boolean', 'Notes': 'Point for heartbeat toggle'},
