@@ -241,8 +241,8 @@ class PlatformDriverAgent(Agent):
                 equipment_config = EquipmentConfig(**contents)
                 self.equipment_tree.add_segment(equipment_name, equipment_config)
             if schedule_now:
-                group = self.equipment_tree.get_group(equipment_name)
-                self.poll_schedulers[group].schedule()
+                points = self.equipment_tree.points(equipment_name)
+                self._update_polling_schedules(points)
             return True
         except ValueError as e:
             _log.warning(f'Skipping configuration of equipment: {equipment_name} after encountering error --- {e}')
@@ -276,7 +276,7 @@ class PlatformDriverAgent(Agent):
             self.interface_classes[remote_config.driver_type] = interface
         return interface
 
-    def _update_equipment(self, config_name: str, _, contents: dict, allow_reschedule=True) -> bool:
+    def _update_equipment(self, config_name: str, _, contents: dict) -> bool:
         """Callback for updating equipment configuration."""
         remote_config, dev_config, registry_config = self._separate_equipment_configs(contents)
         if dev_config:
@@ -288,7 +288,6 @@ class PlatformDriverAgent(Agent):
         else:
             remote = None
         is_changed = self.equipment_tree.update_equipment(config_name, dev_config, remote, registry_config)
-        # TODO: Add reschedule_all_on_update option and reschedule all poll_schedulers when true.
         if is_changed:
             points = self.equipment_tree.points(config_name)
             self._update_polling_schedules(points)
