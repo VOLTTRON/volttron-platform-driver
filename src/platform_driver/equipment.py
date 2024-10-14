@@ -24,9 +24,8 @@ class EquipmentNode(TopicNode):
         super(EquipmentNode, self).__init__(*args, **kwargs)
         self.data['config'] = config if config is not None else EquipmentConfig()
         self.data['remote'] = None
-        # TODO: should ephemeral values like overridden and reserved_by be properties stored in data?
+        # TODO: should ephemeral values like overridden be properties stored in data?
         self.data['overridden']: bool = False
-        self.data['reserved_by'] = None
         self.data['segment_type'] = 'TOPIC_SEGMENT'
 
     @property
@@ -118,14 +117,6 @@ class EquipmentNode(TopicNode):
     @reservation_required_for_write.setter
     def reservation_required_for_write(self, value: bool):
         self.data['config'].reservation_required_for_write = value
-
-    @property
-    def reserved(self) -> str:
-        return self.data['reserved_by']
-
-    @reserved.setter
-    def reserved(self, holder: str):
-        self.data['reserved_by'] = holder
 
     def wipe_configuration(self):
         # Wipe all data and reset segment_type to TOPIC_SEGMENT.
