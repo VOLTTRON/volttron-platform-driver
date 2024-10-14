@@ -341,6 +341,9 @@ class ReservationManager(object):
         now = now if now else get_aware_utc_now()
         self.load_state(now, initial_state_string)
 
+    def reserved_by(self, topic):
+        return self._device_states.get(topic)
+
     def update(self, now, device_only=None, publish=True):
         _log.debug("update")
         # Sanity check now.
