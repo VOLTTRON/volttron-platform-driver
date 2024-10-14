@@ -65,15 +65,15 @@ class OverrideManager:
         # Add to override patterns set
         self.patterns.add(pattern)
         i = 0
-        for name in self.instances.keys():
+        for name in self.agent.equipment_tree.devices():
             i += 1
             if fnmatch.fnmatch(name, pattern):
                 # If revert to default state is needed
                 if failsafe_revert:
                     if staggered_revert:
-                        self.agent.core.spawn_later(i * stagger_interval, self.instances[name].revert_all())
+                        self.agent.core.spawn_later(i * stagger_interval, self.agent.revert(name))
                     else:
-                        self.agent.core.spawn(self.instances[name].revert_all())
+                        self.agent.core.spawn(self.agent.revert(name))
                 # Set override
                 self.devices.add(name)
         # Set timer for interval of override condition
@@ -106,7 +106,7 @@ class OverrideManager:
             patterns = dict()
             # Build override devices list again
             for pat in self.patterns:
-                for device in self.instances:
+                for device in self.agent.equipment_tree.devices():
                     if fnmatch.fnmatch(device, pat):
                         self.devices.add(device)
 
