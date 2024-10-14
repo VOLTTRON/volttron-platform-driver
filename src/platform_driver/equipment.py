@@ -24,9 +24,6 @@ class EquipmentNode(TopicNode):
         super(EquipmentNode, self).__init__(*args, **kwargs)
         self.data['config'] = config if config is not None else EquipmentConfig()
         self.data['remote'] = None
-        # TODO: should ephemeral values like overridden and reserved_by be properties stored in data?
-        self.data['overridden']: bool = False
-        self.data['reserved_by'] = None
         self.data['segment_type'] = 'TOPIC_SEGMENT'
 
     @property
@@ -78,14 +75,6 @@ class EquipmentNode(TopicNode):
     @property
     def is_concrete(self) -> bool:
         return False if self.segment_type == 'TOPIC_SEGMENT' else True
-
-    @property
-    def overridden(self) -> bool:
-        return self.data['overridden']
-
-    @overridden.setter
-    def overridden(self, value: bool):
-        self.data['overridden'] = value
         
     @property
     def publish_single_depth(self) -> bool:
@@ -118,14 +107,6 @@ class EquipmentNode(TopicNode):
     @reservation_required_for_write.setter
     def reservation_required_for_write(self, value: bool):
         self.data['config'].reservation_required_for_write = value
-
-    @property
-    def reserved(self) -> str:
-        return self.data['reserved_by']
-
-    @reserved.setter
-    def reserved(self, holder: str):
-        self.data['reserved_by'] = holder
 
     def wipe_configuration(self):
         # Wipe all data and reset segment_type to TOPIC_SEGMENT.
@@ -376,7 +357,7 @@ class EquipmentTree(TopicTree):
         elif not reserved_by and any(self.rsearch(node.identifier, lambda n: n.reservation_required_for_write)):
             raise ReservationLockError(f'Caller ({requester}) does not have a reservation '
                                        f'for equipment {node.identifier}. A reservation is required to write.')
-        elif any(self.rsearch(node.identifier, lambda n: n.overridden)):
+        elif self.get_device_node(node.identifier).identifier in self.agent.override_manager.devices:
             raise OverrideError(f"Cannot set point on {node.identifier} since global override is set")
         
     def get_device_node(self, nid: str) -> DeviceNode:

@@ -767,7 +767,7 @@ class TestReservationManagerSaveState:
         reservation_manager.save_state(self.now)
 
         # Tests if our mocked object was called once, and with the correct args
-        reservation_manager.parent.vip.config.set.assert_called_once_with(
+        reservation_manager.agent.vip.config.set.assert_called_once_with(
             reservation_manager.reservation_state_file, expected_data,
             send_update=False), "save state should call parent.vip.config.set with correct data"
 

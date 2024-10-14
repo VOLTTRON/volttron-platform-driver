@@ -323,7 +323,7 @@ class Reservation(object):
 class ReservationManager(object):
 
     def __init__(self, parent, grace_time, now=None):
-        self.parent = parent
+        self.agent = parent
         self.tasks = {}
         self.running_tasks = set()
         self.preempted_tasks = set()
@@ -335,7 +335,7 @@ class ReservationManager(object):
         self._update_event_time = None
 
         try:
-            initial_state_string = self.parent.vip.config.get(self.reservation_state_file)
+            initial_state_string = self.agent.vip.config.get(self.reservation_state_file)
         except KeyError:
             initial_state_string = None
         now = now if now else get_aware_utc_now()
@@ -390,14 +390,14 @@ class ReservationManager(object):
                     'window': state.time_remaining
                 }
                 topic = ACTUATOR_RESERVATION_ANNOUNCE_RAW.replace('{device}', device)
-                self.parent.vip.pubsub.publish('pubsub', topic, headers=headers)
+                self.agent.vip.pubsub.publish('pubsub', topic, headers=headers)
 
         if self._update_event is not None:
             # This won't hurt anything if we are canceling ourselves.
             self._update_event.cancel()
         self._update_event_time = new_update_event_time
-        self._update_event = self.parent.core.schedule(new_update_event_time, self.update,
-                                                new_update_event_time)
+        self._update_event = self.agent.core.schedule(new_update_event_time, self.update,
+                                                      new_update_event_time)
 
     # # TODO: Is this function necessary?
     # def _update_reservation_state(self, now):
@@ -405,7 +405,7 @@ class ReservationManager(object):
 
     def _get_adjusted_next_event_time(self, now, next_event_time, previously_reserved_time):
         _log.debug("_get_adjusted_next_event_time")
-        latest_next = now + timedelta(seconds=self.parent.config.reservation_publish_interval)
+        latest_next = now + timedelta(seconds=self.agent.config.reservation_publish_interval)
         # Round to the next second to fix timer goofiness in agent timers.
         # TODO: Improved Reservation Manager should no longer require this.
         if latest_next.microsecond:
@@ -441,7 +441,7 @@ class ReservationManager(object):
         try:
             self._cleanup(now)
             _log.debug(f"Saving {len(self.tasks)} task(s)")
-            self.parent.vip.config.set(self.reservation_state_file, b64encode(dumps(self.tasks)).decode("utf-8"), send_update=False)
+            self.agent.vip.config.set(self.reservation_state_file, b64encode(dumps(self.tasks)).decode("utf-8"), send_update=False)
 
         except Exception as e:
             _log.error(f'Failed to save Reservation Manager state! Error: {e}')

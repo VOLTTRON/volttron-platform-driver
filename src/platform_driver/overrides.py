@@ -20,11 +20,11 @@ class OverrideManager:
     def __init__(self, parent):
         self.devices = set()
         self.interval_events = {}
-        self.parent = parent
+        self.agent = parent
         self.patterns = set()
 
         try:
-            values = loads(self.parent.vip.config.get("_override_patterns"))
+            values = loads(self.agent.vip.config.get("_override_patterns"))
             if isinstance(values, dict):
                 for pattern, end_time in values.items():
                     now = get_aware_utc_now()
@@ -65,15 +65,15 @@ class OverrideManager:
         # Add to override patterns set
         self.patterns.add(pattern)
         i = 0
-        for name in self.instances.keys():
+        for name in self.agent.equipment_tree.devices():
             i += 1
             if fnmatch.fnmatch(name, pattern):
                 # If revert to default state is needed
                 if failsafe_revert:
                     if staggered_revert:
-                        self.parent.core.spawn_later(i * stagger_interval, self.instances[name].revert_all())
+                        self.agent.core.spawn_later(i * stagger_interval, self.agent.revert(name))
                     else:
-                        self.parent.core.spawn(self.instances[name].revert_all())
+                        self.agent.core.spawn(self.agent.revert(name))
                 # Set override
                 self.devices.add(name)
         # Set timer for interval of override condition
@@ -88,7 +88,7 @@ class OverrideManager:
                     evt, end_time = self.interval_events[pat]
                     patterns[pat] = format_timestamp(end_time)
 
-            self.parent.vip.config.set("_override_patterns", dumps(patterns))
+            self.agent.vip.config.set("_override_patterns", dumps(patterns))
 
     def set_off(self, pattern):
         """Turn off override condition on all devices matching the pattern. It removes the pattern from the override
@@ -106,7 +106,7 @@ class OverrideManager:
             patterns = dict()
             # Build override devices list again
             for pat in self.patterns:
-                for device in self.instances:
+                for device in self.agent.equipment_tree.devices():
                     if fnmatch.fnmatch(device, pat):
                         self.devices.add(device)
 
@@ -116,7 +116,7 @@ class OverrideManager:
                     evt, end_time = self.interval_events[pat]
                     patterns[pat] = format_timestamp(end_time)
 
-            self.parent.vip.config.set("_override_patterns", dumps(patterns))
+            self.agent.vip.config.set("_override_patterns", dumps(patterns))
         else:
             _log.error("Override Pattern did not match!")
             raise OverrideError(
@@ -134,7 +134,7 @@ class OverrideManager:
         self.interval_events.clear()
         self.devices.clear()
         self.patterns.clear()
-        self.parent.vip.config.set("_override_patterns", {})
+        self.agent.vip.config.set("_override_patterns", {})
 
     def _update_override_interval(self, interval, pattern):
         """Schedules a new override event for the specified interval and pattern. If the pattern already exists and new
@@ -169,7 +169,7 @@ class OverrideManager:
                     evt = self.interval_events.pop(pattern)
                     evt[0].cancel()
             # Schedule new override event
-            event = self.parent.core.schedule(override_end, self.set_off, pattern)
+            event = self.agent.core.schedule(override_end, self.set_off, pattern)
             self.interval_events[pattern] = (event, override_end)
             return True
 
