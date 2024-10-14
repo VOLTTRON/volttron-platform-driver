@@ -200,7 +200,7 @@ class PollScheduler:
 class StaticCyclicPollScheduler(PollScheduler):
     def __init__(self, *args, **kwargs):
         super(StaticCyclicPollScheduler, self).__init__(*args, **kwargs)
-        # Poll sets has: {remote: {hyperperiod: {slot: WeakSet(points)}}}
+        # Slot Plans has: {remote: {hyperperiod: {slot: WeakSet(points)}}}
         self.slot_plans: list[dict[timedelta, dict[timedelta, list[PollSet]]]] = []
 
     def get_schedule(self):
@@ -217,7 +217,6 @@ class StaticCyclicPollScheduler(PollScheduler):
     @staticmethod
     def calculate_hyperperiod(intervals, minimum_polling_interval):
         return lcm(*[floor(i / minimum_polling_interval) for i in intervals]) * minimum_polling_interval
-        
 
     @staticmethod
     def _separate_coprimes(intervals):
