@@ -145,7 +145,6 @@ class PlatformDriverAgent(Agent):
                 _log.info("Running scalability test. Settings may not be changed without restart.")
                 return
             self.config = new_config
-        # TODO: Should this be in a try block? The old version was, but called loads().
         if self.override_manager is None:
             self.override_manager = OverrideManager(self)
 
@@ -313,8 +312,6 @@ class PlatformDriverAgent(Agent):
             group = self.equipment_tree.get_group(point.identifier)
             poll_schedulers.append(self.poll_schedulers.get(group))
         removed_count = self.equipment_tree.remove_segment(config_name, leave_disconnected)
-        # TODO: Implement override handling.
-        # self._update_override_state(config_name, 'remove')
         # TODO: Add reschedule_all_on_update option and reschedule all poll_schedulers when true.
         return True if removed_count > 0 else False
 
