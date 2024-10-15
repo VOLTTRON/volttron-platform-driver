@@ -78,8 +78,8 @@ class PollSet:
             self.data_model,
             self.remote,
             points=self.points | other.points,
-            single_depth=self.single_depth & other.single_depth,
-            single_breadth=self.single_breadth & other.single_breadth,
+            single_depth=self.single_depth | other.single_depth,
+            single_breadth=self.single_breadth | other.single_breadth,
             multi_depth={k: self.multi_depth.get(k, set()) | other.multi_depth.get(k, set())
                     for k in self.multi_depth.keys() | other.multi_depth.keys()},
             multi_breadth={k: self.multi_breadth.get(k, set()) | other.multi_breadth.get(k, set())
