@@ -654,6 +654,10 @@ class PlatformDriverAgent(Agent):
     def get_poll_schedule(self):
         return {group: scheduler.get_schedule() for group, scheduler in self.poll_schedulers.items()}
 
+    @RPC.export
+    def export_equipment_tree(self):
+        return self.equipment_tree.to_json(with_data=True)
+
     #-------------
     # Reservations
     #-------------
