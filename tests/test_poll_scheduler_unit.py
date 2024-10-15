@@ -1,11 +1,14 @@
-import pytest
-import unittest
-from collections import defaultdict
-from unittest.mock import MagicMock, patch, call
 from datetime import datetime, timedelta, timezone
 from weakref import WeakSet
+import pytest
+from unittest.mock import MagicMock, Mock, patch, call
+from collections import defaultdict
+from weakref import WeakValueDictionary
+from volttron.driver.base.driver import DriverAgent
+from platform_driver.equipment import EquipmentTree, PointNode
 
 from platform_driver.poll_scheduler import (
+    PollSet,
     PollScheduler,
     StaticCyclicPollScheduler,
     SerialPollScheduler,
@@ -806,6 +809,303 @@ class TestStaticCyclicPollSchedulerPrepareToSchedule:
         # ensure _find_slots is called twice, once per remote
         assert scheduler._find_slots.call_count == 2
         assert len(scheduler.slot_plans) == 2
+
+class TestPollSetInit:
+    @pytest.fixture
+    def poll_set(self):
+        # Mocking EquipmentTree
+        data_model = MagicMock(spec=EquipmentTree)
+
+        # Mocking DriverAgent
+        remote = MagicMock(spec=DriverAgent)
+        remote.unique_id = "remote_id"
+
+        # Initialize PollSet with mocked dependencies
+        poll_set = PollSet(
+            data_model=data_model,
+            remote=remote,
+            points=WeakValueDictionary(),
+            single_depth={"depth1"},
+            single_breadth={("depth1", "breadth1")},
+            multi_depth={"device1": {"depth1", "depth2"}},
+            multi_breadth={"device_breadth1": {"breadth1", "breadth2"}}
+        )
+        return poll_set
+
+    def test_initialization(self, poll_set):
+        assert poll_set.data_model is not None
+        assert poll_set.remote is not None
+        assert isinstance(poll_set.points, WeakValueDictionary)
+        assert poll_set.single_depth == {"depth1"}
+        assert poll_set.single_breadth == {("depth1", "breadth1")}
+        assert poll_set.multi_depth == {"device1": {"depth1", "depth2"}}
+        assert poll_set.multi_breadth == {"device_breadth1": {"breadth1", "breadth2"}}
+
+# Test for add method
+class TestPollSetAdd:
+    @pytest.fixture
+    def poll_set(self):
+        data_model = MagicMock(spec=EquipmentTree)
+        remote = MagicMock(spec=DriverAgent)
+        remote.unique_id = "remote_id"
+
+        poll_set = PollSet(
+            data_model=data_model,
+            remote=remote
+        )
+        return poll_set
+
+    @pytest.fixture
+    def point_node(self):
+        def _create_point(name):
+            point = PointNode(name)
+            point.identifier = name  # Ensure identifier matches the name
+            return point
+        return _create_point
+
+    def test_add_point(self, poll_set, point_node):
+        point = point_node("point1")
+
+        with patch.object(poll_set, '_add_to_publish_setup') as mock_add_setup:
+            poll_set.add(point)
+
+            assert poll_set.points["point1"] == point
+            mock_add_setup.assert_called_once_with(point)
+
+class TestPollSetRemove:
+    @pytest.fixture
+    def poll_set(self):
+        data_model = MagicMock(spec=EquipmentTree)
+        remote = MagicMock(spec=DriverAgent)
+        remote.unique_id = "remote_id"
+
+        poll_set = PollSet(
+            data_model=data_model,
+            remote=remote
+        )
+        return poll_set
+
+    @pytest.fixture
+    def point_node(self):
+        def _create_point(name):
+            point = PointNode(name)
+            point.identifier = name  # Ensure identifier matches the name
+            return point
+        return _create_point
+
+    def test_remove_existing_point(self, poll_set, point_node):
+        point = point_node("point1")
+        poll_set.points["point1"] = point
+
+        with patch.object(poll_set, '_remove_from_publish_setup') as mock_remove_setup:
+            result = poll_set.remove(point)
+
+            assert result == point
+            assert "point1" not in poll_set.points
+            mock_remove_setup.assert_called_once_with(point)
+
+    def test_remove_nonexistent_point(self, poll_set, point_node):
+        point = point_node("point2")
+
+        with patch.object(poll_set, '_remove_from_publish_setup') as mock_remove_setup:
+            result = poll_set.remove(point)
+
+            assert result is None
+            mock_remove_setup.assert_called_once_with(point)
+
+class TestPollSetAddToPublishSetup:
+    @pytest.fixture
+    def poll_set(self):
+        # Mocking EquipmentTree
+        data_model = MagicMock(spec=EquipmentTree)
+        # Set default return values for publish flags
+        data_model.is_published_single_depth.return_value = False
+        data_model.is_published_single_breadth.return_value = False
+        data_model.is_published_multi_depth.return_value = False
+        data_model.is_published_multi_breadth.return_value = False
+
+        # Mocking DriverAgent
+        remote = MagicMock(spec=DriverAgent)
+        remote.unique_id = "remote_id"
+
+        # Initialize PollSet with mocked dependencies
+        poll_set = PollSet(
+            data_model=data_model,
+            remote=remote
+        )
+        return poll_set
+
+    @pytest.fixture
+    def point_node(self):
+        def _create_point(name):
+            point = PointNode(name)
+            point.identifier = name  # Ensure identifier matches the name
+            return point
+        return _create_point
+
+    def test_add_to_publish_setup_single_depth(self, poll_set, point_node):
+        point = point_node("point1")
+        poll_set.data_model.is_published_single_depth.return_value = True
+        poll_set.data_model.get_point_topics.return_value = ("depth_topic", "breadth_topic")
+        poll_set.data_model.get_device_topics.return_value = ("device_depth", "device_breadth")  # Add this line
+
+        poll_set._add_to_publish_setup(point)
+
+        assert "depth_topic" in poll_set.single_depth
+
+    def test_add_to_publish_setup_single_breadth(self, poll_set, point_node):
+        point = point_node("point1")
+        poll_set.data_model.is_published_single_breadth.return_value = True
+        poll_set.data_model.get_point_topics.return_value = ("depth_topic", "breadth_topic")
+        poll_set.data_model.get_device_topics.return_value = ("device_depth", "device_breadth")  # Add this line
+
+        poll_set._add_to_publish_setup(point)
+
+        assert ("depth_topic", "breadth_topic") in poll_set.single_breadth
+
+    def test_add_to_publish_setup_multi_depth(self, poll_set, point_node):
+        point = point_node("point1")
+        poll_set.data_model.is_published_multi_depth.return_value = True
+        poll_set.data_model.get_point_topics.return_value = ("depth_topic", "breadth_topic")
+        poll_set.data_model.get_device_topics.return_value = ("device_depth", "device_breadth")
+
+        poll_set._add_to_publish_setup(point)
+
+        assert "depth_topic" in poll_set.multi_depth["device_depth"]
+
+    def test_add_to_publish_setup_multi_breadth(self, poll_set, point_node):
+        point = point_node("point1")
+        poll_set.data_model.is_published_multi_breadth.return_value = True
+        poll_set.data_model.get_point_topics.return_value = ("depth_topic", "breadth_topic")  # Add this line
+        poll_set.data_model.get_device_topics.return_value = ("device_depth", "device_breadth")
+
+        poll_set._add_to_publish_setup(point)
+
+        assert "point1" in poll_set.multi_breadth["device_breadth"]
+
+class TestPollSetRemoveFromPublishSetup:
+    @pytest.fixture
+    def poll_set(self):
+        data_model = MagicMock(spec=EquipmentTree)
+        # Mock methods to return values based on identifier
+        data_model.get_point_topics.side_effect = lambda identifier: (f"depth_{identifier}", f"breadth_{identifier}")
+        data_model.get_device_topics.side_effect = lambda identifier: (f"device_depth_{identifier}", f"device_breadth_{identifier}")
+        data_model.is_published_single_depth.return_value = True
+        data_model.is_published_single_breadth.return_value = True
+        data_model.is_published_multi_depth.return_value = True
+        data_model.is_published_multi_breadth.return_value = True
+
+        remote = MagicMock(spec=DriverAgent)
+        remote.unique_id = "remote_id"
+
+        poll_set = PollSet(
+            data_model=data_model,
+            remote=remote
+        )
+
+        # Pre-populate PollSet with data corresponding to the mocked topics
+        point_identifier = "point1"
+        point_depth, point_breadth = data_model.get_point_topics(point_identifier)
+        device_depth, device_breadth = data_model.get_device_topics(point_identifier)
+        poll_set.single_depth = {point_identifier}
+        poll_set.single_breadth = {(point_depth, point_breadth)}
+        poll_set.multi_depth = {device_depth: {point_depth}}
+        poll_set.multi_breadth = {device_breadth: {point_identifier}}
+        return poll_set
+
+    @pytest.fixture
+    def point_node(self):
+        def _create_point(name):
+            point = PointNode(name)
+            point.identifier = name  # Ensure identifier matches the name
+            return point
+        return _create_point
+
+    def test_remove_from_publish_setup(self, poll_set, point_node):
+        point = point_node("point1")
+
+        poll_set._remove_from_publish_setup(point)
+
+        point_identifier = point.identifier
+        point_depth, point_breadth = poll_set.data_model.get_point_topics(point_identifier)
+        device_depth, device_breadth = poll_set.data_model.get_device_topics(point_identifier)
+
+        # Verify the point has been removed from all sets
+        assert point_identifier not in poll_set.single_depth
+        assert (point_depth, point_breadth) not in poll_set.single_breadth
+        assert point_depth not in poll_set.multi_depth.get(device_depth, set())
+        assert point_identifier not in poll_set.multi_breadth.get(device_breadth, set())
+
+class TestPollSetOr:
+    def test_or_same_data_model_and_remote(self):
+        # Create mock data_model and remote
+        data_model = MagicMock(name='data_model')
+        remote = MagicMock(name='remote')
+        remote.unique_id = 'remote_id'
+
+        # Create two PollSet instances with minimal data
+        poll_set1 = PollSet(
+            data_model=data_model,
+            remote=remote,
+            points={'point1': 'value1'},
+            single_depth={'point1'},
+            single_breadth={('depth1', 'breadth1')},
+            multi_depth={'device1': {'depth1'}},
+            multi_breadth={'device_breadth1': {'point1'}}
+        )
+
+        poll_set2 = PollSet(
+            data_model=data_model,
+            remote=remote,
+            points={'point2': 'value2'},
+            single_depth={'point2'},
+            single_breadth={('depth2', 'breadth2')},
+            multi_depth={'device1': {'depth2'}},
+            multi_breadth={'device_breadth1': {'point2'}}
+        )
+
+        # Combine poll_sets
+        combined = poll_set1 | poll_set2
+
+        # Assertions
+        assert combined.data_model == data_model
+        assert combined.remote == remote
+        assert combined.points == {'point1': 'value1', 'point2': 'value2'}
+        assert combined.single_depth == {'point1', 'point2'}
+        assert combined.single_breadth == {('depth1', 'breadth1'), ('depth2', 'breadth2')}
+        assert combined.multi_depth == {'device1': {'depth1', 'depth2'}}
+        assert combined.multi_breadth == {'device_breadth1': {'point1', 'point2'}}
+
+    def test_or_different_data_model(self):
+        # Create different data_models
+        data_model1 = MagicMock(name='data_model1')
+        data_model2 = MagicMock(name='data_model2')
+        remote = MagicMock(name='remote')
+        remote.unique_id = 'remote_id'
+
+        poll_set1 = PollSet(data_model=data_model1, remote=remote)
+        poll_set2 = PollSet(data_model=data_model2, remote=remote)
+
+        with pytest.raises(ValueError) as exc_info:
+            _ = poll_set1 | poll_set2
+
+        assert 'Cannot combine PollSets based on different data models' in str(exc_info.value)
+
+    def test_or_different_remote(self):
+        data_model = MagicMock(name='data_model')
+        remote1 = MagicMock(name='remote1')
+        remote1.unique_id = 'remote_id1'
+        remote2 = MagicMock(name='remote2')
+        remote2.unique_id = 'remote_id2'
+
+        poll_set1 = PollSet(data_model=data_model, remote=remote1)
+        poll_set2 = PollSet(data_model=data_model, remote=remote2)
+
+        with pytest.raises(ValueError) as exc_info:
+            _ = poll_set1 | poll_set2
+
+        assert 'Cannot combine PollSets based on different remotes' in str(exc_info.value)
+
 
 if __name__ == '__main__':
     pytest.main()
