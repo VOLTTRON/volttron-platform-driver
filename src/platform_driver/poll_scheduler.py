@@ -56,10 +56,16 @@ class PollSet:
             self.multi_breadth[device_breadth].add(point.identifier)
 
     def _remove_from_publish_setup(self, point: PointNode):
+        point_depth, point_breadth = self.data_model.get_point_topics(point.identifier)
+        device_depth, device_breadth = self.data_model.get_device_topics(point.identifier)
         self.single_depth.discard(point.identifier)
-        self.single_breadth.discard(point.identifier)
-        [dev.discard(point.identifier) for dev in self.multi_depth.values()]
-        [dev.discard(point.identifier) for dev in self.multi_breadth.values()]
+        self.single_breadth.discard((point_depth, point_breadth))
+        self.multi_depth[device_depth].discard(point_depth)
+        if not self.multi_depth[device_depth]:
+            self.multi_depth.pop(device_depth, None)
+        self.multi_breadth[device_breadth].discard(point.identifier)
+        if not self.multi_breadth[device_breadth]:
+            self.multi_breadth.pop(device_breadth, None)
 
     def __or__(self, other):
         if self.data_model is not other.data_model:
