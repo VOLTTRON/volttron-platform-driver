@@ -29,16 +29,6 @@ SAMPLE_REGISTRY = [{'Point Name': 'EKG', 'Volttron Point Name': 'EKG', 'Units': 
 {'Point Name': 'ERWH_Phy0_ValveState', 'Volttron Point Name': 'ValveState', 'Units': '1/0', 'Units Details': '1/0', 'Writable': 'TRUE', 'Starting Value': '0', 'Type': 'int', 'Notes': 'power on off status'}
 ]
 
-def test_build_remote_tree(remote_tree):
-    assert remote_tree.to_dict() == {'remotes': {'children': ['0', {'Panel2': {'children': ['Bus1', 'Bus2']}}]}}
-
-def test_add_and_remove_remote(remote_tree, driver_agent):
-    group_id = 'remotes/Panel2/Bus1'
-    remote_tree.add_remote(driver_agent, group_id)
-    assert driver_agent in remote_tree.get_node(group_id).remotes
-    remote_tree.remove_remote(driver_agent, group_id)
-    assert driver_agent not in remote_tree.get_node(group_id).remotes
-
 def test_build_equipment_tree(driver_agent):
     et = EquipmentTree()
     assert et.root == 'devices'

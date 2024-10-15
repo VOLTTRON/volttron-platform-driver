@@ -21,12 +21,15 @@
 #
 # ===----------------------------------------------------------------------===
 # }}}
+import json
 
-from gevent import Timeout
+from collections import defaultdict
+from datetime import timedelta
+from enum import Enum
+from pydantic import BaseModel
 from typing import Union, Iterable
 from treelib import Tree, Node
 from treelib.exceptions import DuplicatedNodeIdError, NodeIDAbsentError
-from collections import defaultdict
 
 from volttron.client.known_identities import CONFIGURATION_STORE
 
@@ -165,6 +168,19 @@ class TopicTree(Tree):
             return list(nodes)
         else:
             return [n.identifier for n in nodes]
+
+    def to_json(self, with_data=False, sort=True, reverse=False):
+        """To format the tree in JSON format."""
+        def custom_encoder(obj):
+            if isinstance(obj, BaseModel):
+                return obj.model_dump()
+            if isinstance(obj, Enum):
+                return obj.value
+            if isinstance(obj, timedelta):
+                return obj.total_seconds()
+            return json.JSONEncoder().default(obj)
+
+        return json.dumps(self.to_dict(with_data=with_data, sort=sort, reverse=reverse), default=custom_encoder)
 
 
 class DeviceNode(TopicNode):

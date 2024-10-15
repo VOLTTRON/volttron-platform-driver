@@ -117,7 +117,7 @@ class DeviceNode(EquipmentNode):
     def __init__(self, config, driver, *args, **kwargs):
         config = config.copy()
         super(DeviceNode, self).__init__(config, *args, **kwargs)
-        self.data['remote']: DriverAgent = driver
+        self._remote: DriverAgent = driver
         self.data['registry_name'] = None
         self.data['segment_type'] = 'DEVICE'
         self.config_finished = False
@@ -128,7 +128,7 @@ class DeviceNode(EquipmentNode):
 
     @property
     def remote(self) -> DriverAgent:
-        return self.data['remote']
+        return self._remote
 
     @property
     def registry_name(self) -> str:
