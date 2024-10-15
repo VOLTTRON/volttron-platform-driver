@@ -117,7 +117,7 @@ class DeviceNode(EquipmentNode):
     def __init__(self, config, driver, *args, **kwargs):
         config = config.copy()
         super(DeviceNode, self).__init__(config, *args, **kwargs)
-        self.data['remote']: DriverAgent = driver
+        self._remote: DriverAgent = driver
         self.data['registry_name'] = None
         self.data['segment_type'] = 'DEVICE'
         self.config_finished = False
@@ -128,7 +128,7 @@ class DeviceNode(EquipmentNode):
 
     @property
     def remote(self) -> DriverAgent:
-        return self.data['remote']
+        return self._remote
 
     @property
     def registry_name(self) -> str:
@@ -204,7 +204,7 @@ class EquipmentTree(TopicTree):
         root_config.publish_all_depth = agent.config.publish_all_depth
         root_config.publish_all_breadth = agent.config.publish_all_breadth
 
-    def _set_registry_name(self, nid):
+    def set_registry_name(self, nid):
         # TODO: This method should be unnecessary, if we can just get the registry_name in the config_store push.
         #  The registry name itself was not available at configuration time
         #   and is not returned by the self.config.get() method ( it is dereferenced, already).
@@ -234,7 +234,7 @@ class EquipmentTree(TopicTree):
         # Set up the device node itself.
         try:
             device_node = DeviceNode(config=dev_config, driver=driver_agent, tag=device_name, identifier=device_topic)
-            device_node.data['registry_name'] = self._set_registry_name(device_node.identifier)
+            device_node.data['registry_name'] = self.set_registry_name(device_node.identifier)
             self.add_node(device_node, parent=parent)
         except DuplicatedNodeIdError:
             # TODO: If the node already exists, update it as necessary?
@@ -347,7 +347,7 @@ class EquipmentTree(TopicTree):
 
     def find_points(self, topic_pattern: str = '', regex: str = None, exact_matches: Iterable = None
                     ) -> Iterable[PointNode]:
-        return (p for p in self.find_leaves(topic_pattern, regex, exact_matches) if p.is_point)
+        return (p for p in self.resolve_query(topic_pattern, regex, exact_matches, return_leaves=True) if p.is_point)
 
     def raise_on_locks(self, node: EquipmentNode, requester: str):
         reserved_by = self.agent.reservation_manager.reserved_by(node.identifier, requester)
@@ -406,6 +406,8 @@ class EquipmentTree(TopicTree):
         return any(p.stale for p in self.points(nid))
 
     def update_stored_registry_config(self, nid: str):
+        # TODO: This updates the registry using JSON no matter what its original saved format was. This should be fine,
+        #  and JSON should probably be preferred anyway, but it does not update the name, which is probably foo.csv....
         device_node = self.get_device_node(nid)
         registry = [p.config.model_dump() for p in self.points(device_node.identifier)]
         if device_node.registry_name:

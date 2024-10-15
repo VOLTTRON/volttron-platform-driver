@@ -21,12 +21,15 @@
 #
 # ===----------------------------------------------------------------------===
 # }}}
+import json
 
-from gevent import Timeout
+from collections import defaultdict
+from datetime import timedelta
+from enum import Enum
+from pydantic import BaseModel
 from typing import Union, Iterable
 from treelib import Tree, Node
 from treelib.exceptions import DuplicatedNodeIdError, NodeIDAbsentError
-from collections import defaultdict
 
 from volttron.client.known_identities import CONFIGURATION_STORE
 
@@ -113,7 +116,8 @@ class TopicTree(Tree):
                 ret_dict[k] = normpath('/'.join([prefix, s.pop()]))
         return ret_dict
 
-    def find_leaves(self, topic_pattern: str = '', regex: str = None, exact_matches: Iterable = None) -> Iterable:
+    def resolve_query(self, topic_pattern: str = '', regex: str = None, exact_matches: Iterable = None,
+                      return_leaves=False) -> Iterable:
         def clipping(topic_parts, nids=None):
             nids = nids if nids else []
             if topic_parts:
@@ -122,12 +126,13 @@ class TopicTree(Tree):
                     if not nids:
                         return clipping(topic_parts, [part]) if self.get_node(part) else nids
                     else:
-                        joined_nids = [self.get_node('/'.join([c, part])).identifier for n in nids for c in n.children]
+                        joined_nids = [self.get_node('/'.join([c.identifier, part])).identifier
+                                       for n in nids for c in self.children(n)]
                         return clipping(topic_parts, joined_nids)
                 else:
                     return nids
             else:
-                return [l.identifier for n in nids for l in self.leaves(n)]
+                return [l.identifier for n in nids for l in self.leaves(n)] if return_leaves else nids
 
         regex = re.compile(regex) if regex else None
         topic_nids = clipping([part.strip('/') for part in topic_pattern.split('/-') if part != '']) if topic_pattern else []
@@ -138,7 +143,7 @@ class TopicTree(Tree):
         elif not topic_nids and exact_matches:
             nodes = (self.get_node(n) for n in exact_matches if (not regex or regex.search(n)) and self.contains(n))
         else:
-            nodes = self.filter_nodes(lambda n: regex.search(n.identifier)) if regex else [] # TODO: Why was this here? --- else self.all_nodes_itr()
+            nodes = self.filter_nodes(lambda n: regex.search(n.identifier)) if regex else []
         return nodes
 
     def prune(self, topic_pattern: str = None, regex: str = None, exact_matches: Iterable = None, *args, **kwargs):
@@ -165,6 +170,19 @@ class TopicTree(Tree):
             return list(nodes)
         else:
             return [n.identifier for n in nodes]
+
+    def to_json(self, with_data=False, sort=True, reverse=False):
+        """To format the tree in JSON format."""
+        def custom_encoder(obj):
+            if isinstance(obj, BaseModel):
+                return obj.model_dump()
+            if isinstance(obj, Enum):
+                return obj.value
+            if isinstance(obj, timedelta):
+                return obj.total_seconds()
+            return json.JSONEncoder().default(obj)
+
+        return json.dumps(self.to_dict(with_data=with_data, sort=sort, reverse=reverse), default=custom_encoder)
 
 
 class DeviceNode(TopicNode):

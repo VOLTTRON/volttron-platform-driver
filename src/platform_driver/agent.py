@@ -52,7 +52,7 @@ from volttron.utils.scheduling import periodic
 
 from platform_driver.config import PlatformDriverConfig
 from platform_driver.constants import *
-from platform_driver.equipment import EquipmentTree, PointNode
+from platform_driver.equipment import DeviceNode, EquipmentNode, EquipmentTree, PointNode
 from platform_driver.overrides import OverrideManager
 from platform_driver.poll_scheduler import PollScheduler
 from platform_driver.reservations import ReservationManager
@@ -527,42 +527,55 @@ class PlatformDriverAgent(Agent):
 
     @RPC.export
     def enable(self, topic: str | Sequence[str] | Set[str] = None, regex: str = None) -> None:
-        nodes = self.equipment_tree.find_points(topic, regex)
+        nodes = self.equipment_tree.resolve_query(topic, regex)
         self._enable(nodes)
 
     @RPC.export
     def semantic_enable(self, query: str) -> None:
         topics = self.semantic_query(query)
-        points = self.equipment_tree.find_points(topics)
+        points = self.equipment_tree.resolve_query(topics)
         self._enable(points)
 
-    def _enable(self, nodes: Iterable[PointNode]):
+    def _enable(self, nodes: Iterable[DeviceNode | EquipmentNode | PointNode]):
         for node in nodes:
             node.config.active = True
             if not node.is_point:
-                # TODO: Make sure this doesn't trigger UPDATE.
-                self.vip.config.set(node.topic, node.config.model_dump(), trigger_callback=False)
+                new_config = node.config.model_dump()
+                if node.is_device:
+                    self._add_fields_to_device_configuration_for_save(new_config, node)
+                self.vip.config.set(node.identifier, new_config, trigger_callback=False)
             else:
                 self.equipment_tree.update_stored_registry_config(node.identifier)
 
     @RPC.export
     def disable(self, topic: str | Sequence[str] | Set[str] = None, regex: str = None) -> None:
-        nodes = self.equipment_tree.find_points(topic, regex)
+        nodes = self.equipment_tree.resolve_query(topic, regex)
         self._disable(nodes)
 
     @RPC.export
     def semantic_disable(self, query: str) -> None:
         topics = self.semantic_query(query)
-        points = self.equipment_tree.find_points(topics)
+        points = self.equipment_tree.resolve_query(topics)
         self._disable(points)
 
-    def _disable(self, nodes: Iterable[PointNode]) -> None:
+    def _disable(self, nodes: Iterable[DeviceNode | EquipmentNode | PointNode]) -> None:
         for node in nodes:
             node.config.active = False
             if not node.is_point:
-                self.vip.config.set(node.topic, node.config.model_dump(), trigger_callback=False)
+                new_config = node.config.model_dump()
+                if node.is_device:
+                    self._add_fields_to_device_configuration_for_save(new_config, node)
+                self.vip.config.set(node.identifier, new_config, trigger_callback=False)
             else:
                 self.equipment_tree.update_stored_registry_config(node.identifier)
+
+    def _add_fields_to_device_configuration_for_save(self, new_config, node):
+        registry_name = node.registry_name
+        if not registry_name or not (registry_name := self.equipment_tree.set_registry_name(node.identifier)):
+            raise Exception(f'Unable to set configuration for device node {node.identifier}.'
+                            f' Registry name is unknown and cannot be determined.')
+        new_config['registry_config'] = registry_name
+        new_config['remote_config'] = self.equipment_tree.get_remote(node.identifier).config.model_dump()
 
     @RPC.export
     def status(self, topic: str | Sequence[str] | Set[str] = None, regex: str = None) -> dict:
@@ -640,6 +653,10 @@ class PlatformDriverAgent(Agent):
     @RPC.export
     def get_poll_schedule(self):
         return {group: scheduler.get_schedule() for group, scheduler in self.poll_schedulers.items()}
+
+    @RPC.export
+    def export_equipment_tree(self):
+        return self.equipment_tree.to_json(with_data=True)
 
     #-------------
     # Reservations
