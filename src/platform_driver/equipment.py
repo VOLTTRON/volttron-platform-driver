@@ -217,6 +217,8 @@ class EquipmentTree(TopicTree):
             _log.warning(f'Unable to get registry_name for device: {nid} -- {e}')
         finally:
             reg_name = remote_conf.get('registry_config', '')
+            # TODO: This should probably actually be checking if it is a string that startswith("config://").
+            #  What if the registry is a json dictionary in the device config?
             return reg_name[len('config://'):] if len(reg_name) >= len('config://') else None
 
     def add_device(self, device_topic: str, dev_config: DeviceConfig, driver_agent: DriverAgent,

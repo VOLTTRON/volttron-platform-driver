@@ -574,7 +574,9 @@ class PlatformDriverAgent(Agent):
         if not registry_name or not (registry_name := self.equipment_tree.set_registry_name(node.identifier)):
             raise Exception(f'Unable to set configuration for device node {node.identifier}.'
                             f' Registry name is unknown and cannot be determined.')
-        new_config['registry_config'] = registry_name
+        # TODO: This assumes that the registry was originally provided as a separate file.
+        #  We should detect this and modify the file or dict that was originally configured.
+        new_config['registry_config'] = f'config://{registry_name}'
         new_config['remote_config'] = self.equipment_tree.get_remote(node.identifier).config.model_dump()
 
     @RPC.export
