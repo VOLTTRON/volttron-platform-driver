@@ -21,6 +21,7 @@
 #
 # ===----------------------------------------------------------------------===
 # }}}
+
 import json
 
 from collections import defaultdict
@@ -134,6 +135,7 @@ class TopicTree(Tree):
             else:
                 return [l.identifier for n in nids for l in self.leaves(n)] if return_leaves else nids
 
+        topic_pattern = topic_pattern if topic_pattern.startswith(self.root) else '/'.join([self.root, topic_pattern])
         regex = re.compile(regex) if regex else None
         topic_nids = clipping([part.strip('/') for part in topic_pattern.split('/-') if part != '']) if topic_pattern else []
         if topic_nids and exact_matches:
