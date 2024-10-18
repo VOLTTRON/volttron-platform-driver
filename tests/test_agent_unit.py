@@ -9,7 +9,9 @@ from platform_driver.agent import PlatformDriverAgent, PlatformDriverConfig, STA
     PointConfig, DriverAgent, PointNode
 from platform_driver.constants import VALUE_RESPONSE_PREFIX, RESERVATION_RESULT_TOPIC
 
+
 class TestPDALoadAgentConfig:
+
     @pytest.fixture
     def PDA(self):
         PDA = PlatformDriverAgent()
@@ -46,7 +48,7 @@ class TestPDALoadAgentConfig:
         PDA.core.connected = True
         # Prepare an invalid configuration dictionary
         invalid_config = {
-            'max_open_sockets': 'invalid',  # should be an int
+            'max_open_sockets': 'invalid',    # should be an int
             'max_concurrent_publishes': 10,
             'scalability_test': False,
             'remote_heartbeat_interval': 30,
@@ -58,9 +60,8 @@ class TestPDALoadAgentConfig:
         assert isinstance(result, PlatformDriverConfig)
         # Check that 'invalid' is not kept in the config
         assert result.max_open_sockets != 'invalid'
-        assert any(
-            'Validation of platform driver configuration file failed. Using default values.' in message for message in
-            caplog.text.splitlines())
+        assert any('Validation of platform driver configuration file failed. Using default values.'
+                   in message for message in caplog.text.splitlines())
         # Ensure health status was set to bad
         PDA.vip.health.set_status.assert_called_once()
         status_args = PDA.vip.health.set_status.call_args[0]
@@ -71,7 +72,7 @@ class TestPDALoadAgentConfig:
         PDA.core.connected = False
         # invalid configuration dictionary
         invalid_config = {
-            'max_open_sockets': 'invalid',  # Should be an int
+            'max_open_sockets': 'invalid',    # Should be an int
             'max_concurrent_publishes': 10,
             'scalability_test': False,
             'remote_heartbeat_interval': 30,
@@ -79,11 +80,11 @@ class TestPDALoadAgentConfig:
         }
         result = PDA._load_agent_config(invalid_config)
         assert isinstance(result, PlatformDriverConfig)
-        assert any(
-            'Validation of platform driver configuration file failed. Using default values.' in message for message in
-            caplog.text.splitlines())
+        assert any('Validation of platform driver configuration file failed. Using default values.'
+                   in message for message in caplog.text.splitlines())
         # make sure health status was not set since agent is not connected
         PDA.vip.health.set_status.assert_not_called()
+
 
 class TestPDAConfigureMain:
 
@@ -92,21 +93,167 @@ class TestPDAConfigureMain:
         PDA = PlatformDriverAgent()
         PDA.core = MagicMock()
         PDA.vip = MagicMock()
-
         PDA.vip.config.get = Mock(return_value='{}')
+
+        # Set initial config using MagicMock for attribute access
+        PDA.config = MagicMock()
+        PDA.config.max_open_sockets = 100
+        PDA.config.max_concurrent_publishes = 5
+        PDA.config.scalability_test = False
+        PDA.config.scalability_test_iterations = 10
+        PDA.config.reservation_preempt_grace_time = 5
+        PDA.config.reservation_publish_interval = 30
+        PDA.config.remote_heartbeat_interval = 60
+
+        # Set PDA.config.copy() to return a copy of the config
+        def copy_config():
+            copied_config = MagicMock()
+            copied_config.max_open_sockets = PDA.config.max_open_sockets
+            copied_config.max_concurrent_publishes = PDA.config.max_concurrent_publishes
+            copied_config.scalability_test = PDA.config.scalability_test
+            copied_config.scalability_test_iterations = PDA.config.scalability_test_iterations
+            copied_config.reservation_preempt_grace_time = PDA.config.reservation_preempt_grace_time
+            copied_config.reservation_publish_interval = PDA.config.reservation_publish_interval
+            copied_config.remote_heartbeat_interval = PDA.config.remote_heartbeat_interval
+            return copied_config
+
+        PDA.config.copy = copy_config
 
         return PDA
 
-    def test_configure_main_calls_configure_publish_lock(self, PDA):
-        """Tests the configure main calls setup_socket_lock and configure_publish_lock when action is new"""
-        with patch('platform_driver.agent.setup_socket_lock') as mock_setup_socket_lock, \
-             patch('platform_driver.agent.configure_publish_lock') as mock_configure_publish_lock:
-            contents = {'config_version': 2, 'publish_depth_first_any': True}
-            PDA.configure_main(_="", action="NEW", contents=contents)
-            mock_setup_socket_lock.assert_called_once()
-            mock_configure_publish_lock.assert_called_once()
+    def test_configure_main_new_action(self, PDA):
+        """Tests configure main when action is "NEW"""
+        # Arrange
+        new_config = MagicMock()
+        new_config.max_open_sockets = 100
+        new_config.max_concurrent_publishes = 10
+        new_config.scalability_test = False
+        new_config.scalability_test_iterations = 10
+        new_config.reservation_preempt_grace_time = 5
+        new_config.reservation_publish_interval = 30
+        new_config.remote_heartbeat_interval = 60
+
+        PDA._load_agent_config = Mock(return_value=new_config)
+
+        # Mock dependencies
+        with patch('platform_driver.agent.EquipmentTree') as mock_equipment_tree_class, \
+             patch('platform_driver.agent.setup_socket_lock') as mock_setup_socket_lock, \
+             patch('platform_driver.agent.configure_publish_lock') as mock_configure_publish_lock, \
+             patch('platform_driver.agent.OverrideManager') as mock_override_manager_class, \
+             patch('platform_driver.agent.ReservationManager') as mock_reservation_manager_class, \
+             patch('platform_driver.agent.get_aware_utc_now', return_value='now'):
+
+            # Act
+            PDA.configure_main(_="", action="NEW", contents={})
+
+            # Assert
+            PDA._load_agent_config.assert_called_once_with({})
+            assert PDA.config == new_config
+            mock_equipment_tree_class.assert_called_once_with(PDA)
+            mock_setup_socket_lock.assert_called_once_with(new_config.max_open_sockets)
+            mock_configure_publish_lock.assert_called_once_with(
+                new_config.max_concurrent_publishes)
+            mock_override_manager_class.assert_called_once_with(PDA)
+            mock_reservation_manager_class.assert_called_once_with(
+                PDA, new_config.reservation_preempt_grace_time, 'now')
+            PDA.reservation_manager.update.assert_called_once_with('now')
+            # Check that heartbeat_greenlet is set up
+            PDA.core.periodic.assert_called_once_with(new_config.remote_heartbeat_interval,
+                                                      PDA.heart_beat)
+
+    def test_configure_main_update_action(self, PDA):
+        """tests when action is update"""
+        # Arrange
+        new_config = MagicMock()
+        new_config.max_open_sockets = 200    # Different to trigger log message
+        new_config.max_concurrent_publishes = 15    # Different to trigger log message
+        new_config.scalability_test = False
+        new_config.scalability_test_iterations = 20
+        new_config.reservation_preempt_grace_time = 10
+        new_config.reservation_publish_interval = 30
+        new_config.remote_heartbeat_interval = 60
+
+        PDA._load_agent_config = Mock(return_value=new_config)
+
+        PDA.override_manager = Mock()
+        PDA.reservation_manager = Mock()
+
+        with patch('platform_driver.agent._log') as mock_log:
+            # Act
+            PDA.configure_main(_="", action="UPDATE", contents={})
+
+            # Assert
+            mock_log.info.assert_any_call('Updated configuration received for Platform Driver.')
+            mock_log.info.assert_any_call(
+                'Restart Platform Driver for changes to the max_open_sockets setting to take effect'
+            )
+            mock_log.info.assert_any_call(
+                'Restart Platform Driver for changes to the max_concurrent_publishes setting to take effect'
+            )
+
+            # Check that new_config attributes are reverted to old values
+            assert new_config.max_open_sockets == PDA.config.max_open_sockets
+            assert new_config.max_concurrent_publishes == PDA.config.max_concurrent_publishes
+
+            # Since scalability_test is False, config should be updated
+            assert PDA.config == new_config
+
+            # Verify that reservation_manager's grace period is updated
+            PDA.reservation_manager.set_grace_period.assert_called_once_with(
+                new_config.reservation_preempt_grace_time)
+
+    def test_configure_main_creates_override_manager(self, PDA):
+        """Tests configure main created override manager"""
+        # Arrange
+        new_config = MagicMock()
+        new_config.max_open_sockets = 100
+        new_config.max_concurrent_publishes = 10
+        new_config.scalability_test = False
+        new_config.scalability_test_iterations = 10
+        new_config.reservation_preempt_grace_time = 5
+        new_config.reservation_publish_interval = 30
+        new_config.remote_heartbeat_interval = 60
+
+        PDA._load_agent_config = Mock(return_value=new_config)
+        PDA.override_manager = None    # Ensure it's None
+
+        with patch('platform_driver.agent.OverrideManager') as mock_override_manager_class:
+            # Act
+            PDA.configure_main(_="", action="UPDATE", contents={})
+
+            # Assert
+            mock_override_manager_class.assert_called_once_with(PDA)
+            assert PDA.override_manager is not None
+
+    def test_configure_main_creates_reservation_manager(self, PDA):
+        """configure main creates reservation manager"""
+        # Arrange
+        new_config = MagicMock()
+        new_config.max_open_sockets = 100
+        new_config.max_concurrent_publishes = 10
+        new_config.scalability_test = False
+        new_config.scalability_test_iterations = 10
+        new_config.reservation_preempt_grace_time = 5
+        new_config.reservation_publish_interval = 30
+        new_config.remote_heartbeat_interval = 60
+
+        PDA._load_agent_config = Mock(return_value=new_config)
+        PDA.reservation_manager = None    # Ensure it's None
+
+        with patch('platform_driver.agent.ReservationManager') as mock_reservation_manager_class, \
+                patch('platform_driver.agent.get_aware_utc_now', return_value='now'):
+            # Act
+            PDA.configure_main(_="", action="UPDATE", contents={})
+
+            # Assert
+            mock_reservation_manager_class.assert_called_once_with(
+                PDA, new_config.reservation_preempt_grace_time, 'now')
+            assert PDA.reservation_manager is not None
+            PDA.reservation_manager.update.assert_called_once_with('now')
+
 
 class TestPDASeparateEquipmentConfigs:
+
     @pytest.fixture
     def PDA(self):
         PDA = PlatformDriverAgent()
@@ -129,11 +276,15 @@ class TestPDASeparateEquipmentConfigs:
                 'driver_type': 'mock_driver',
                 'some_remote_setting': 'value'
             },
-            'registry_config': [
-                {'point_name': 'temperature', 'unit': 'C'},
-                {'point_name': 'humidity', 'unit': '%'}
-            ],
-            'some_device_setting': 'device_value'
+            'registry_config': [{
+                'point_name': 'temperature',
+                'unit': 'C'
+            }, {
+                'point_name': 'humidity',
+                'unit': '%'
+            }],
+            'some_device_setting':
+            'device_value'
         }
 
         # Mock the instantiation of INTERFACE_CONFIG_CLASS
@@ -180,7 +331,9 @@ class TestPDASeparateEquipmentConfigs:
         assert point_names == {'temperature', 'humidity'}
         assert units == {'C', '%'}
 
+
 class TestPDAConfigureNewEquipment:
+
     @pytest.fixture
     def PDA(self):
         PDA = PlatformDriverAgent()
@@ -257,14 +410,13 @@ class TestPDAConfigureNewEquipment:
 
         result = PDA._configure_new_equipment(equipment_name, None, contents)
 
-
         PDA._separate_equipment_configs.assert_called_once_with(contents)
         PDA._get_or_create_remote.assert_called_once_with(equipment_name, remote_config,
                                                           dev_config.allow_duplicate_remotes)
-        PDA.equipment_tree.add_device.assert_called_once_with(
-            device_topic=equipment_name, dev_config=dev_config,
-            driver_agent=driver, registry_config=registry_config
-        )
+        PDA.equipment_tree.add_device.assert_called_once_with(device_topic=equipment_name,
+                                                              dev_config=dev_config,
+                                                              driver_agent=driver,
+                                                              registry_config=registry_config)
         driver.add_equipment.assert_called_once_with(device_node)
         assert result == True
 
@@ -293,7 +445,8 @@ class TestPDAConfigureNewEquipment:
 
             PDA._separate_equipment_configs.assert_called_once_with(contents)
             MockEquipmentConfig.assert_called_once_with(**contents)
-            PDA.equipment_tree.add_segment.assert_called_once_with(equipment_name, equipment_config_instance)
+            PDA.equipment_tree.add_segment.assert_called_once_with(equipment_name,
+                                                                   equipment_config_instance)
             assert result == True
 
     def test_configure_new_equipment_separate_equipment_configs_raises_value_error(self, PDA):
@@ -318,7 +471,9 @@ class TestPDAConfigureNewEquipment:
             # Check that result is False
             assert result == False
 
+
 class TestPDAGetOrCreateRemote:
+
     @pytest.fixture
     def PDA(self):
         PDA = PlatformDriverAgent()
@@ -374,20 +529,15 @@ class TestPDAGetOrCreateRemote:
             driver_agent_instance = MockDriverAgent.return_value
 
             # Call the method
-            result = PDA._get_or_create_remote(equipment_name, remote_config, allow_duplicate_remotes)
+            result = PDA._get_or_create_remote(equipment_name, remote_config,
+                                               allow_duplicate_remotes)
 
             # Assertions
             PDA._get_configured_interface.assert_called_once_with(remote_config)
             interface.unique_remote_id.assert_called_once_with(equipment_name, remote_config)
-            MockDriverAgent.assert_called_once_with(
-                remote_config,
-                PDA.core,
-                PDA.equipment_tree,
-                PDA.scalability_test,
-                PDA.config.timezone,
-                'unique_id_2',
-                PDA.vip
-            )
+            MockDriverAgent.assert_called_once_with(remote_config, PDA.core, PDA.equipment_tree,
+                                                    PDA.scalability_test, PDA.config.timezone,
+                                                    'unique_id_2', PDA.vip)
             # Check that the new driver agent is stored
             assert PDA.equipment_tree.remotes['unique_id_2'] == driver_agent_instance
             assert result == driver_agent_instance
@@ -395,7 +545,7 @@ class TestPDAGetOrCreateRemote:
     def test_get_or_create_remote_allow_duplicate_remotes_true(self, PDA):
         equipment_name = 'equipment3'
         remote_config = MagicMock()
-        remote_config.driver_type = 'fake_driver'  # Set driver_type to a valid string
+        remote_config.driver_type = 'fake_driver'    # Set driver_type to a valid string
         allow_duplicate_remotes = True
 
         # Mock interface
@@ -407,20 +557,16 @@ class TestPDAGetOrCreateRemote:
                 patch('platform_driver.agent.DriverAgent') as MockDriverAgent, \
                 patch('volttron.driver.base.interfaces.BaseInterface.get_interface_subclass', return_value=MagicMock()):
             # Call the method
-            result = PDA._get_or_create_remote(equipment_name, remote_config, allow_duplicate_remotes)
+            result = PDA._get_or_create_remote(equipment_name, remote_config,
+                                               allow_duplicate_remotes)
 
             # Assertions
             PDA._get_configured_interface.assert_called_once_with(remote_config)
-            interface.unique_remote_id.assert_not_called()  # Should not be called when duplicates are allowed
-            MockDriverAgent.assert_called_once_with(
-                remote_config,
-                PDA.core,
-                PDA.equipment_tree,
-                PDA.scalability_test,
-                PDA.config.timezone,
-                'unique_id_base',
-                PDA.vip
-            )
+            interface.unique_remote_id.assert_not_called(
+            )    # Should not be called when duplicates are allowed
+            MockDriverAgent.assert_called_once_with(remote_config, PDA.core, PDA.equipment_tree,
+                                                    PDA.scalability_test, PDA.config.timezone,
+                                                    'unique_id_base', PDA.vip)
             # Check that the new driver agent is stored
             assert PDA.equipment_tree.remotes['unique_id_base'] == MockDriverAgent.return_value
             assert result == MockDriverAgent.return_value
@@ -428,7 +574,7 @@ class TestPDAGetOrCreateRemote:
     def test_get_or_create_remote_allow_duplicate_remotes_false_config_true(self, PDA):
         equipment_name = 'equipment4'
         remote_config = MagicMock()
-        remote_config.driver_type = 'fake_driver'  # Set driver_type to a valid string
+        remote_config.driver_type = 'fake_driver'    # Set driver_type to a valid string
         allow_duplicate_remotes = False
 
         # PDA.config.allow_duplicate_remotes is True
@@ -444,24 +590,23 @@ class TestPDAGetOrCreateRemote:
                 patch('platform_driver.agent.DriverAgent') as MockDriverAgent, \
                 patch('volttron.driver.base.interfaces.BaseInterface.get_interface_subclass', return_value=MagicMock()):
 
-            result = PDA._get_or_create_remote(equipment_name, remote_config, allow_duplicate_remotes)
+            result = PDA._get_or_create_remote(equipment_name, remote_config,
+                                               allow_duplicate_remotes)
 
             PDA._get_configured_interface.assert_called_once_with(remote_config)
-            interface.unique_remote_id.assert_not_called()  # Should not be called when duplicates are allowed
-            MockDriverAgent.assert_called_once_with(
-                remote_config,
-                PDA.core,
-                PDA.equipment_tree,
-                PDA.scalability_test,
-                PDA.config.timezone,
-                'unique_id_base_config_true',
-                PDA.vip
-            )
+            interface.unique_remote_id.assert_not_called(
+            )    # Should not be called when duplicates are allowed
+            MockDriverAgent.assert_called_once_with(remote_config, PDA.core, PDA.equipment_tree,
+                                                    PDA.scalability_test, PDA.config.timezone,
+                                                    'unique_id_base_config_true', PDA.vip)
             # Check that the new driver agent is stored
-            assert PDA.equipment_tree.remotes['unique_id_base_config_true'] == MockDriverAgent.return_value
+            assert PDA.equipment_tree.remotes[
+                'unique_id_base_config_true'] == MockDriverAgent.return_value
             assert result == MockDriverAgent.return_value
 
+
 class TestPDAGetConfiguredInterface:
+
     @pytest.fixture
     def PDA(self):
         PDA = PlatformDriverAgent()
@@ -489,7 +634,8 @@ class TestPDAGetConfiguredInterface:
         PDA.interface_classes = {}
 
         # Mock BaseInterface.get_interface_subclass
-        with patch('platform_driver.agent.BaseInterface.get_interface_subclass') as mock_get_interface_subclass:
+        with patch('platform_driver.agent.BaseInterface.get_interface_subclass'
+                   ) as mock_get_interface_subclass:
             loaded_interface = MagicMock()
             mock_get_interface_subclass.return_value = loaded_interface
 
@@ -500,7 +646,9 @@ class TestPDAGetConfiguredInterface:
             assert PDA.interface_classes['driver_type_2'] == loaded_interface
             assert result == loaded_interface
 
+
 class TestPDAUpdateEquipment:
+
     @pytest.fixture
     def PDA(self):
         PDA = PlatformDriverAgent()
@@ -534,9 +682,8 @@ class TestPDAUpdateEquipment:
         PDA._separate_equipment_configs.assert_called_once_with(contents)
         PDA._get_or_create_remote.assert_called_once_with(config_name, remote_config,
                                                           dev_config.allow_duplicate_remotes)
-        PDA.equipment_tree.update_equipment.assert_called_once_with(config_name, dev_config,
-                                                                    PDA._get_or_create_remote.return_value,
-                                                                    registry_config)
+        PDA.equipment_tree.update_equipment.assert_called_once_with(
+            config_name, dev_config, PDA._get_or_create_remote.return_value, registry_config)
 
     def test_update_equipment_device_config_present_update_not_needed(self, PDA):
         config_name = 'equipment2'
@@ -559,8 +706,10 @@ class TestPDAUpdateEquipment:
         result = PDA._update_equipment(config_name, None, contents)
 
         PDA._separate_equipment_configs.assert_called_once_with(contents)
-        PDA._get_or_create_remote.assert_called_once_with(config_name, remote_config, dev_config.allow_duplicate_remotes)
-        PDA.equipment_tree.update_equipment.assert_called_once_with(config_name, dev_config, remote, registry_config)
+        PDA._get_or_create_remote.assert_called_once_with(config_name, remote_config,
+                                                          dev_config.allow_duplicate_remotes)
+        PDA.equipment_tree.update_equipment.assert_called_once_with(config_name, dev_config,
+                                                                    remote, registry_config)
         # Polling should not be rescheduled
         PDA.equipment_tree.points.assert_not_called()
         assert result == False
@@ -571,7 +720,7 @@ class TestPDAUpdateEquipment:
 
         # Mock _separate_equipment_configs to return expected configs
         remote_config = Mock()
-        dev_config = None  # Device config absent
+        dev_config = None    # Device config absent
         registry_config = Mock()
         PDA._separate_equipment_configs.return_value = (remote_config, dev_config, registry_config)
 
@@ -587,7 +736,8 @@ class TestPDAUpdateEquipment:
         assert result is True
         PDA._separate_equipment_configs.assert_called_once_with(contents)
         PDA._get_or_create_remote.assert_not_called()
-        PDA.equipment_tree.update_equipment.assert_called_once_with(config_name, dev_config, None, registry_config)
+        PDA.equipment_tree.update_equipment.assert_called_once_with(config_name, dev_config, None,
+                                                                    registry_config)
 
     def test_update_equipment_exception_during_remote_creation(self, PDA):
         config_name = 'equipment4'
@@ -607,7 +757,8 @@ class TestPDAUpdateEquipment:
             result = PDA._update_equipment(config_name, None, contents)
 
             PDA._separate_equipment_configs.assert_called_once_with(contents)
-            PDA._get_or_create_remote.assert_called_once_with(config_name, remote_config, dev_config.allow_duplicate_remotes)
+            PDA._get_or_create_remote.assert_called_once_with(config_name, remote_config,
+                                                              dev_config.allow_duplicate_remotes)
             PDA.equipment_tree.update_equipment.assert_not_called()
             mock_log.warning.assert_called_once_with(
                 f'Skipping configuration of equipment: {config_name} after encountering error --- Error message'
@@ -635,13 +786,17 @@ class TestPDAUpdateEquipment:
         result = PDA._update_equipment(config_name, None, contents)
 
         PDA._separate_equipment_configs.assert_called_once_with(contents)
-        PDA._get_or_create_remote.assert_called_once_with(config_name, remote_config, dev_config.allow_duplicate_remotes)
-        PDA.equipment_tree.update_equipment.assert_called_once_with(config_name, dev_config, remote, registry_config)
+        PDA._get_or_create_remote.assert_called_once_with(config_name, remote_config,
+                                                          dev_config.allow_duplicate_remotes)
+        PDA.equipment_tree.update_equipment.assert_called_once_with(config_name, dev_config,
+                                                                    remote, registry_config)
         # Polling should not be rescheduled
         PDA.equipment_tree.points.assert_called()
         assert result == True
 
+
 class TestPDARemoveEquipment:
+
     @pytest.fixture
     def PDA(self):
         PDA = PlatformDriverAgent()
@@ -694,7 +849,9 @@ class TestPDARemoveEquipment:
         PDA.equipment_tree.get_group.assert_not_called()
         PDA.equipment_tree.remove_segment.assert_called_once()
 
+
 class TestPDAStartAllPublishes:
+
     @pytest.fixture
     def PDA(self):
         PDA = PlatformDriverAgent()
@@ -728,7 +885,7 @@ class TestPDAStartAllPublishes:
 
         PDA._start_all_publishes()
 
-        PDA.core.schedule.assert_not_called() # no scheduling was done
+        PDA.core.schedule.assert_not_called()    # no scheduling was done
 
     def test_start_all_publishes_device_not_published(self, PDA):
         # Mock a device with all_publish_interval
@@ -742,7 +899,7 @@ class TestPDAStartAllPublishes:
 
         PDA._start_all_publishes()
 
-        PDA.core.schedule.assert_not_called() # no scheduling was done
+        PDA.core.schedule.assert_not_called()    # no scheduling was done
 
     def test_start_all_publishes_device_published_depth(self, PDA):
         # Mock a device with all_publish_interval
@@ -782,6 +939,7 @@ class TestPDAStartAllPublishes:
         PDA.core.schedule.assert_called_once()
         assert device in PDA.publishers
 
+
 class TestPDAAllPublish:
 
     @pytest.fixture
@@ -814,7 +972,8 @@ class TestPDAAllPublish:
 
     @patch('platform_driver.agent.publish_wrapper')
     @patch('platform_driver.agent.publication_headers')
-    def test_all_publish_published_all_depth(self, mock_publication_headers, mock_publish_wrapper, PDA):
+    def test_all_publish_published_all_depth(self, mock_publication_headers, mock_publish_wrapper,
+                                             PDA):
         node = MagicMock(identifier='device3')
         PDA.equipment_tree.get_node.return_value = node
         PDA.equipment_tree.is_ready.return_value = True
@@ -827,16 +986,21 @@ class TestPDAAllPublish:
 
         PDA._all_publish(node)
 
-        mock_publish_wrapper.assert_called_once_with(
-            PDA.vip, f'depth_topic/all', headers={}, message=[
-                {'point1': 42},
-                {'point1': {'units': 'degC'}}
-            ]
-        )
+        mock_publish_wrapper.assert_called_once_with(PDA.vip,
+                                                     f'depth_topic/all',
+                                                     headers={},
+                                                     message=[{
+                                                         'point1': 42
+                                                     }, {
+                                                         'point1': {
+                                                             'units': 'degC'
+                                                         }
+                                                     }])
 
     @patch('platform_driver.agent.publish_wrapper')
     @patch('platform_driver.agent.publication_headers')
-    def test_all_publish_published_all_breadth(self, mock_publication_headers, mock_publish_wrapper, PDA):
+    def test_all_publish_published_all_breadth(self, mock_publication_headers,
+                                               mock_publish_wrapper, PDA):
         node = MagicMock(identifier='device4')
         PDA.equipment_tree.get_node.return_value = node
         PDA.equipment_tree.is_ready.return_value = True
@@ -850,12 +1014,16 @@ class TestPDAAllPublish:
 
         PDA._all_publish(node)
 
-        mock_publish_wrapper.assert_called_once_with(
-            PDA.vip, f'breadth_topic/all', headers={}, message=[
-                {'point1': 100},
-                {'point1': {'units': 'kW'}}
-            ]
-        )
+        mock_publish_wrapper.assert_called_once_with(PDA.vip,
+                                                     f'breadth_topic/all',
+                                                     headers={},
+                                                     message=[{
+                                                         'point1': 100
+                                                     }, {
+                                                         'point1': {
+                                                             'units': 'kW'
+                                                         }
+                                                     }])
 
     @patch('platform_driver.agent.publish_wrapper')
     @patch('platform_driver.agent.publication_headers')
@@ -872,6 +1040,7 @@ class TestPDAAllPublish:
         PDA._all_publish(node)
 
         mock_publish_wrapper.assert_not_called()
+
 
 class TestPDASemanticQuery:
 
@@ -903,7 +1072,9 @@ class TestPDASemanticQuery:
         PDA.vip.rpc.call.assert_called_once_with('platform.semantic', 'semantic_query', query)
         PDA.vip.rpc.call.return_value.get.assert_called_once_with(timeout=5)
         assert result == {}
-        assert any("Semantic Interoperability Service timed out" in record.message for record in caplog.records)
+        assert any("Semantic Interoperability Service timed out" in record.message
+                   for record in caplog.records)
+
 
 class TestPDABuildQueryPlan:
     """Tests for build_query_plan"""
@@ -946,6 +1117,7 @@ class TestPDABuildQueryPlan:
         expected_result[PDA.driver_agent_mock] = {PDA.point_node_mock}
         assert result == expected_result
 
+
 class TestPDAGet:
     """Tests for get."""
 
@@ -986,6 +1158,7 @@ class TestPDAGet:
         # Validate if methods were called with correct parameters
         PDA.build_query_plan.assert_called_once_with("topic", "regex")
         remote_mock.get_multiple_points.assert_called_once_with(["point"])
+
 
 class TestPDASemanticGet:
 
@@ -1081,6 +1254,7 @@ class TestPDASemanticGet:
         PDA._get.assert_called_once_with(query_plan)
         assert "Get data error" in str(exc_info.value)
 
+
 class TestPDAUnderscoreGet:
     """Tests for _get"""
 
@@ -1093,7 +1267,7 @@ class TestPDAUnderscoreGet:
 
     def test_get_success(self, PDA):
         """Test that _get successfully retrieves and processes data from remotes."""
-        
+
         remote = MagicMock(spec=DriverAgent)
         point1 = MagicMock(spec=PointNode)
         point1.identifier = 'topic1'
@@ -1108,7 +1282,10 @@ class TestPDAUnderscoreGet:
         # Mock equipment_tree.get_node to return nodes
         node1 = MagicMock(spec=PointNode)
         node2 = MagicMock(spec=PointNode)
-        PDA.equipment_tree.get_node.side_effect = lambda topic: {'topic1': node1, 'topic2': node2}.get(topic)
+        PDA.equipment_tree.get_node.side_effect = lambda topic: {
+            'topic1': node1,
+            'topic2': node2
+        }.get(topic)
 
         results, errors = PDA._get(query_plan)
 
@@ -1129,7 +1306,7 @@ class TestPDAUnderscoreGet:
 
     def test_get_with_errors(self, PDA):
         """Test that _get correctly captures errors returned by remotes."""
-        
+
         remote = MagicMock(spec=DriverAgent)
         point1 = MagicMock(spec=PointNode)
         point1.identifier = 'topic1'
@@ -1165,7 +1342,9 @@ class TestPDAUnderscoreGet:
         assert results == {}
         assert errors == {}
 
+
 class TestPDASet:
+
     @pytest.fixture
     def pda(self):
         """Fixture to create a PlatformDriverAgent instance with mocked dependencies."""
@@ -1179,7 +1358,7 @@ class TestPDASet:
         Test the 'set' method with a single topic and a single value,
         without confirmation and without mapping points.
         """
-        value = 100  # Single value for all points
+        value = 100    # Single value for all points
         topics = ['topic1']
         regex = None
         confirm_values = False
@@ -1193,13 +1372,11 @@ class TestPDASet:
         expected_errors = {}
         pda._set.return_value = (expected_results, expected_errors)
 
-        results, errors = pda.set(
-            value=value,
-            topic=topics,
-            regex=regex,
-            confirm_values=confirm_values,
-            map_points=map_points
-        )
+        results, errors = pda.set(value=value,
+                                  topic=topics,
+                                  regex=regex,
+                                  confirm_values=confirm_values,
+                                  map_points=map_points)
         pda.build_query_plan.assert_called_once_with(topics, regex)
         pda._set.assert_called_once_with(value, expected_query_plan, confirm_values, map_points)
         assert results == expected_results
@@ -1210,7 +1387,7 @@ class TestPDASet:
         Test the 'set' method with multiple topics and multiple values,
         with confirmation and with mapping points.
         """
-        value = {'topic1': 100, 'topic2': 200}  # Different values for each topic
+        value = {'topic1': 100, 'topic2': 200}    # Different values for each topic
         topics = ['topic1', 'topic2']
         regex = None
         confirm_values = True
@@ -1224,13 +1401,11 @@ class TestPDASet:
         expected_errors = {}
         pda._set.return_value = (expected_results, expected_errors)
 
-        results, errors = pda.set(
-            value=value,
-            topic=topics,
-            regex=regex,
-            confirm_values=confirm_values,
-            map_points=map_points
-        )
+        results, errors = pda.set(value=value,
+                                  topic=topics,
+                                  regex=regex,
+                                  confirm_values=confirm_values,
+                                  map_points=map_points)
         pda.build_query_plan.assert_called_once_with(topics, regex)
         pda._set.assert_called_once_with(value, expected_query_plan, confirm_values, map_points)
         assert results == expected_results
@@ -1240,9 +1415,9 @@ class TestPDASet:
         """
         Test the 'set' method with a regex pattern for topic selection.
         """
-        value = 150  # Single value for all matched points
+        value = 150    # Single value for all matched points
         topics = None
-        regex = r'^sensor_.*$'  # Regex to match topics starting with 'sensor_'
+        regex = r'^sensor_.*$'    # Regex to match topics starting with 'sensor_'
         confirm_values = False
         map_points = False
 
@@ -1254,13 +1429,11 @@ class TestPDASet:
         expected_errors = {}
         pda._set.return_value = (expected_results, expected_errors)
 
-        results, errors = pda.set(
-            value=value,
-            topic=topics,
-            regex=regex,
-            confirm_values=confirm_values,
-            map_points=map_points
-        )
+        results, errors = pda.set(value=value,
+                                  topic=topics,
+                                  regex=regex,
+                                  confirm_values=confirm_values,
+                                  map_points=map_points)
         pda.build_query_plan.assert_called_once_with(topics, regex)
         pda._set.assert_called_once_with(value, expected_query_plan, confirm_values, map_points)
         assert results == expected_results
@@ -1270,7 +1443,7 @@ class TestPDASet:
         """
         Test the 'set' method returns errors when the '_set' method indicates failures.
         """
-        value = 50  # Single value for all points
+        value = 50    # Single value for all points
         topics = ['topic5']
         regex = None
         confirm_values = False
@@ -1284,21 +1457,20 @@ class TestPDASet:
         expected_errors = {'topic5': 'Failed to set value'}
         pda._set.return_value = (expected_results, expected_errors)
 
-        results, errors = pda.set(
-            value=value,
-            topic=topics,
-            regex=regex,
-            confirm_values=confirm_values,
-            map_points=map_points
-        )
-
+        results, errors = pda.set(value=value,
+                                  topic=topics,
+                                  regex=regex,
+                                  confirm_values=confirm_values,
+                                  map_points=map_points)
 
         pda.build_query_plan.assert_called_once_with(topics, regex)
         pda._set.assert_called_once_with(value, expected_query_plan, confirm_values, map_points)
         assert results == expected_results
         assert errors == expected_errors
 
+
 class TestPDASemanticSet:
+
     @pytest.fixture
     def pda(self):
         pda = PlatformDriverAgent()
@@ -1410,7 +1582,133 @@ class TestPDASemanticSet:
         assert errors == expected_errors
 
 
+class TestUnderscoreSet:
+    """Tests for the _set function in platform_driver.agent."""
+
+    def test_set_single_value_no_confirm(self):
+        """Verify _set sets multiple points with a single value without confirmation."""
+        value = "new_value"
+        remote = Mock()
+        point1 = Mock()
+        point1.identifier = "point1"
+        point2 = Mock()
+        point2.identifier = "point2"
+        query_plan = {remote: {point1, point2}}
+        confirm_values = False
+        map_points = False
+
+        remote.set_multiple_points.return_value = {}
+
+        results, errors = PlatformDriverAgent._set(value, query_plan, confirm_values, map_points)
+
+        expected_tuples = [("point1", "new_value"), ("point2", "new_value")]
+        remote.set_multiple_points.assert_called_once()
+        actual_args, actual_kwargs = remote.set_multiple_points.call_args
+        assert set(actual_args[0]) == set(
+            expected_tuples), "set_multiple_points called with incorrect arguments."
+        assert not errors, "Errors should be empty when no errors are returned."
+        assert not results, "Results should be empty when confirm_values is False."
+
+    def test_set_single_value_with_confirm(self):
+        """Ensure _set sets multiple points with a single value and confirms the changes."""
+        value = "new_value"
+        remote = Mock()
+        point1 = Mock()
+        point1.identifier = "point1"
+        point2 = Mock()
+        point2.identifier = "point2"
+        query_plan = {remote: {point1, point2}}
+        confirm_values = True
+        map_points = False
+
+        remote.set_multiple_points.return_value = {}
+        remote.get_multiple_points.return_value = {"point1": "new_value", "point2": "new_value"}
+
+        results, errors = PlatformDriverAgent._set(value, query_plan, confirm_values, map_points)
+        expected_tuples = [("point1", "new_value"), ("point2", "new_value")]
+        remote.set_multiple_points.assert_called_once()
+        actual_set_args, _ = remote.set_multiple_points.call_args
+        assert set(actual_set_args[0]) == set(
+            expected_tuples), "set_multiple_points called with incorrect arguments."
+
+        remote.get_multiple_points.assert_called_once()
+        actual_get_args, _ = remote.get_multiple_points.call_args
+        assert set(actual_get_args[0]) == {
+            "point1", "point2"
+        }, "get_multiple_points called with incorrect arguments."
+
+        assert "point1" in results, "Result should contain 'point1'."
+        assert "point2" in results, "Result should contain 'point2'."
+        assert results["point1"] == "new_value", "'point1' should have the updated value."
+        assert results["point2"] == "new_value", "'point2' should have the updated value."
+        assert not errors, "Errors should be empty when no errors are returned."
+
+    def test_set_mapped_values_no_confirm(self):
+        """Check _set sets multiple points with different values without confirmation."""
+        value = {"point1": "value1", "point2": "value2"}
+        remote = Mock()
+        point1 = Mock()
+        point1.identifier = "point1"
+        point2 = Mock()
+        point2.identifier = "point2"
+        query_plan = {remote: {point1, point2}}
+        confirm_values = False
+        map_points = True
+
+        remote.set_multiple_points.return_value = {}
+
+        results, errors = PlatformDriverAgent._set(value, query_plan, confirm_values, map_points)
+
+        expected_tuples = [("point1", "value1"), ("point2", "value2")]
+        remote.set_multiple_points.assert_called_once()
+        actual_args, actual_kwargs = remote.set_multiple_points.call_args
+        assert set(actual_args[0]) == set(
+            expected_tuples), "set_multiple_points called with incorrect arguments."
+        assert not errors, "Errors should be empty when no errors are returned."
+        assert not results, "Results should be empty when confirm_values is False."
+
+    def test_set_mapped_values_with_confirm(self):
+        """Validate _set sets multiple points with different values and confirms the changes."""
+        value = {"point1": "value1", "point2": "value2"}
+        remote = Mock()
+        point1 = Mock()
+        point1.identifier = "point1"
+        point2 = Mock()
+        point2.identifier = "point2"
+        query_plan = {remote: {point1, point2}}
+        confirm_values = True
+        map_points = True
+
+        remote.set_multiple_points.return_value = {"point2": "Set error"}
+        remote.get_multiple_points.return_value = {"point1": "value1", "point2": "old_value"}
+
+        results, errors = PlatformDriverAgent._set(value, query_plan, confirm_values, map_points)
+
+        expected_tuples = [("point1", "value1"), ("point2", "value2")]
+        remote.set_multiple_points.assert_called_once()
+        actual_set_args, _ = remote.set_multiple_points.call_args
+        assert set(actual_set_args[0]) == set(
+            expected_tuples), "set_multiple_points called with incorrect arguments."
+
+        remote.get_multiple_points.assert_called_once()
+        actual_get_args, _ = remote.get_multiple_points.call_args
+        assert set(actual_get_args[0]) == {
+            "point1", "point2"
+        }, "get_multiple_points called with incorrect arguments."
+
+        assert "point1" in results, "Result should contain 'point1'."
+        assert "point2" in results, "Result should contain 'point2'."
+        assert results["point1"] == "value1", "'point1' should have the updated value."
+        assert results[
+            "point2"] == "old_value", "'point2' should reflect the old value due to the error."
+
+        # Check that the specific error is captured
+        assert "point2" in errors, "Errors should contain 'point2'."
+        assert errors["point2"] == "Set error", "'point2' should have the correct error message."
+
+
 class TestPlatformDriverAgentRevertMethods:
+
     @pytest.fixture
     def pda(self):
         """
@@ -1446,7 +1744,7 @@ class TestPlatformDriverAgentRevertMethods:
         pda.build_query_plan.assert_called_once_with(topic, regex)
         mock_revert.assert_called_once_with(expected_query_plan)
         assert errors == {}
-        mock_revert.stop()  # stop the patch to avoid side effects
+        mock_revert.stop()    # stop the patch to avoid side effects
 
     def test_revert_with_multiple_topics_with_errors(self, pda, mocker):
         """Test the 'revert' method with multiple topics and some errors during revert."""
@@ -1459,16 +1757,15 @@ class TestPlatformDriverAgentRevertMethods:
         point1 = MagicMock(spec=PointNode, identifier='point1')
         point2 = MagicMock(spec=PointNode, identifier='point2')
 
-        expected_query_plan = {
-            remote1: {point1},
-            remote2: {point2}
-        }
+        expected_query_plan = {remote1: {point1}, remote2: {point2}}
 
         # Mock build_query_plan to return the expected_query_plan
         pda.build_query_plan.return_value = expected_query_plan
 
         # Mock the _revert static method to simulate an error on remote2
-        mock_revert = mocker.patch.object(PlatformDriverAgent, '_revert', return_value={'point2': 'Revert failed'})
+        mock_revert = mocker.patch.object(PlatformDriverAgent,
+                                          '_revert',
+                                          return_value={'point2': 'Revert failed'})
 
         errors = pda.revert(topic=topics, regex=regex)
 
@@ -1573,7 +1870,9 @@ class TestPlatformDriverAgentRevertMethods:
         pda.build_query_plan.return_value = expected_query_plan
 
         # Mock the _revert static method to simulate an error on point2
-        mock_revert = mocker.patch.object(PlatformDriverAgent, '_revert', return_value={'point2': 'Revert failed'})
+        mock_revert = mocker.patch.object(PlatformDriverAgent,
+                                          '_revert',
+                                          return_value={'point2': 'Revert failed'})
 
         errors = pda.semantic_revert(query=query)
 
@@ -1594,10 +1893,7 @@ class TestPlatformDriverAgentRevertMethods:
         remote2 = MagicMock(spec=DriverAgent)
         point1 = MagicMock(spec=PointNode, identifier='point1')
         point2 = MagicMock(spec=PointNode, identifier='point2')
-        query_plan = {
-            remote1: {point1},
-            remote2: {point2}
-        }
+        query_plan = {remote1: {point1}, remote2: {point2}}
 
         # Mock revert_point to not raise any exceptions
         remote1.revert_point.return_value = None
@@ -1617,10 +1913,7 @@ class TestPlatformDriverAgentRevertMethods:
         point1 = MagicMock(spec=PointNode, identifier='point1')
         point2 = MagicMock(spec=PointNode, identifier='point2')
         point3 = MagicMock(spec=PointNode, identifier='point3')
-        query_plan = {
-            remote1: {point1, point2},
-            remote2: {point3}
-        }
+        query_plan = {remote1: {point1, point2}, remote2: {point3}}
 
         # Define side effect functions based on identifier
         def remote1_revert_point_side_effect(identifier):
@@ -1661,10 +1954,7 @@ class TestPlatformDriverAgentRevertMethods:
         point2 = MagicMock(spec=PointNode, identifier='point2')
         point3 = MagicMock(spec=PointNode, identifier='point3')
         point4 = MagicMock(spec=PointNode, identifier='point4')
-        query_plan = {
-            remote1: {point1, point2},
-            remote2: {point3, point4}
-        }
+        query_plan = {remote1: {point1, point2}, remote2: {point3, point4}}
 
         # Define side effect functions based on identifier
         def remote1_revert_point_side_effect(identifier):
@@ -1682,10 +1972,9 @@ class TestPlatformDriverAgentRevertMethods:
 
         errors = PlatformDriverAgent._revert(query_plan)
 
-        expected_errors = {
-            'point3': 'Failed to revert point3'
-        }
+        expected_errors = {'point3': 'Failed to revert point3'}
         assert errors == expected_errors
+
 
 class TestPlatformDriverAgentLast:
     """Tests for Last"""
@@ -1771,7 +2060,6 @@ class TestPlatformDriverAgentLast:
 #         PDA.poll_scheduler.schedule.assert_not_called()
 #         PDA.poll_scheduler.add_to_schedule.assert_called_once_with(point_mock)
 
-
 # class TestPlatformDriverAgentStop:
 #     """Tests for Stop"""
 #
@@ -1832,7 +2120,6 @@ class TestPlatformDriverAgentLast:
 #         PDA.poll_scheduler.schedule.assert_not_called()
 #         PDA.poll_scheduler.remove_from_schedule.assert_called_once_with(point_mock)
 
-
 # class TestPlatformDriverAgentEnable:
 #
 #     @pytest.fixture
@@ -1880,7 +2167,6 @@ class TestPlatformDriverAgentLast:
 #         PDA.equipment_tree.get_device_node.assert_called_once_with(node_mock.identifier)
 #         device_node_mock.update_registry_row.assert_called_once_with(node_mock.config)
 #         PDA.vip.config.set.assert_not_called()
-
 
 # class TestPlatformDriverAgentDisable:
 #     """ Tests for disable function"""
@@ -1930,7 +2216,6 @@ class TestPlatformDriverAgentLast:
 #         PDA.equipment_tree.get_device_node.assert_called_once_with(node_mock.identifier)
 #         device_node_mock.update_registry_row.assert_called_once_with(node_mock.config)
 #         PDA.vip.config.set.assert_not_called()
-
 
 # class TestPlatformDriverAgentNewReservation:
 #     """ Tests for new reservation """
@@ -2299,6 +2584,7 @@ class TestRevertDevice:
         PDA._equipment_id.assert_called_with(self.path, None)
         PDA._push_result_topic_pair.assert_called()
 
+
 class TestHandleGet:
     sender = "test.agent"
     topic = "devices/actuators/get/device1/SampleWritableFloat1"
@@ -2484,7 +2770,6 @@ class TestHandleRevertPoint:
 #         agent_instance.equipment_tree.get_node.assert_called_with(expected_topic)
 #         agent_instance._handle_error.assert_called_with(exception, expected_topic, headers)
 
-
 # class TestHandleReservationRequest:
 #
 #     @pytest.fixture
@@ -2629,11 +2914,7 @@ class TestGetHeaders:
         """Test _get_headers with only requester and current time provided."""
         formatted_now = format_timestamp(self.now)
         result = PlatformDriverAgent()._get_headers(requester="test_requester", time=self.now)
-        expected = {
-            'time': formatted_now,
-            'requesterID': "test_requester",
-            'type': None
-        }
+        expected = {'time': formatted_now, 'requesterID': "test_requester", 'type': None}
         assert result == expected
 
     def test_get_headers_with_time(self):
@@ -2641,22 +2922,16 @@ class TestGetHeaders:
         custom_time = datetime(2024, 7, 25, 18, 52, 29, 37938)
         formatted_custom_time = format_timestamp(custom_time)
         result = PlatformDriverAgent()._get_headers("test_requester", time=custom_time)
-        expected = {
-            'time': formatted_custom_time,
-            'requesterID': "test_requester",
-            'type': None
-        }
+        expected = {'time': formatted_custom_time, 'requesterID': "test_requester", 'type': None}
         assert result == expected
 
     def test_get_headers_with_task_id(self):
         """Test _get_headers with a task ID provided."""
         task_id = "task123"
         formatted_now = format_timestamp(self.now)
-        result = PlatformDriverAgent()._get_headers(
-            requester="test_requester",
-            time=self.now,
-            task_id=task_id
-        )
+        result = PlatformDriverAgent()._get_headers(requester="test_requester",
+                                                    time=self.now,
+                                                    task_id=task_id)
         expected = {
             'time': formatted_now,
             'requesterID': "test_requester",
@@ -2669,16 +2944,10 @@ class TestGetHeaders:
         """Test _get_headers with an action type provided."""
         action_type = "NEW_SCHEDULE"
         formatted_now = format_timestamp(self.now)
-        result = PlatformDriverAgent()._get_headers(
-            requester="test_requester",
-            time=self.now,
-            action_type=action_type
-        )
-        expected = {
-            'time': formatted_now,
-            'requesterID': "test_requester",
-            'type': action_type
-        }
+        result = PlatformDriverAgent()._get_headers(requester="test_requester",
+                                                    time=self.now,
+                                                    action_type=action_type)
+        expected = {'time': formatted_now, 'requesterID': "test_requester", 'type': action_type}
         assert result == expected
 
     def test_get_headers_all_optional(self):
@@ -2687,12 +2956,10 @@ class TestGetHeaders:
         formatted_custom_time = format_timestamp(custom_time)
         task_id = "task123"
         action_type = "NEW_SCHEDULE"
-        result = PlatformDriverAgent()._get_headers(
-            requester="test_requester",
-            time=custom_time,
-            task_id=task_id,
-            action_type=action_type
-        )
+        result = PlatformDriverAgent()._get_headers(requester="test_requester",
+                                                    time=custom_time,
+                                                    task_id=task_id,
+                                                    action_type=action_type)
         expected = {
             'time': formatted_custom_time,
             'requesterID': "test_requester",
