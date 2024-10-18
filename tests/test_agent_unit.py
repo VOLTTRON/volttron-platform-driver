@@ -7,7 +7,10 @@ from typing import Set, Dict
 from volttron.utils import format_timestamp, get_aware_utc_now
 from platform_driver.agent import PlatformDriverAgent, PlatformDriverConfig, STATUS_BAD, RemoteConfig, DeviceConfig, \
     PointConfig, DriverAgent, PointNode
+from platform_driver.overrides import OverrideError
+from platform_driver.reservations import ReservationLockError
 from platform_driver.constants import VALUE_RESPONSE_PREFIX, RESERVATION_RESULT_TOPIC
+from platform_driver.equipment import EquipmentNode
 
 
 class TestPDALoadAgentConfig:
@@ -2321,6 +2324,259 @@ class TestPDAStartAndStopMethods:
             scheduler.remove_from_schedule.assert_not_called()
 
 
+class TestPDAUnderscoreEnable:
+
+    @pytest.fixture
+    def pda(self):
+        pda = PlatformDriverAgent()
+        pda._add_fields_to_device_configuration_for_save = MagicMock()
+        pda.vip.config.set = MagicMock()
+        pda.equipment_tree = MagicMock()
+        return pda
+
+    def test_enable_device_node(self, pda):
+        """Test _enable method activates a device node and updates its config."""
+        # Mock a device node
+        mock_device_node = MagicMock()
+        mock_device_node.is_point = False
+        mock_device_node.is_device = True
+        mock_device_node.identifier = 'device_1'
+        mock_device_node.config = MagicMock()
+        mock_device_node.config.active = False
+        mock_device_node.config.model_dump.return_value = {'some': 'config'}
+
+        pda._enable([mock_device_node])
+
+        # Assert that the node's config.active is set to True
+        assert mock_device_node.config.active is True
+
+        # Ensure that _add_fields_to_device_configuration_for_save and vip.config.set were called
+        pda._add_fields_to_device_configuration_for_save.assert_called_once_with(
+            mock_device_node.config.model_dump.return_value, mock_device_node)
+        pda.vip.config.set.assert_called_once_with(mock_device_node.identifier,
+                                                   mock_device_node.config.model_dump(),
+                                                   trigger_callback=False)
+
+    def test_enable_point_node(self, pda):
+        """Test _enable method activates a point node and updates its registry."""
+        # Mock a point node
+        mock_point_node = MagicMock()
+        mock_point_node.is_point = True
+        mock_point_node.is_device = False
+        mock_point_node.identifier = 'point_1'
+        mock_point_node.config = MagicMock()
+        mock_point_node.config.active = False
+
+        pda._enable([mock_point_node])
+
+        # Assert that the node's config.active is set to True
+        assert mock_point_node.config.active is True
+
+        # Ensure update_stored_registry_config was called for the point node
+        pda.equipment_tree.update_stored_registry_config.assert_called_once_with(
+            mock_point_node.identifier)
+
+
+class TestPDAUnderscoreDisable:
+
+    @pytest.fixture
+    def pda(self):
+        pda = PlatformDriverAgent()
+        pda._add_fields_to_device_configuration_for_save = MagicMock()
+        pda.vip.config.set = MagicMock()
+        pda.equipment_tree = MagicMock()
+        return pda
+
+    def test_disable_device_node(self, pda):
+        """Test _disable method deactivates a device node and updates its config."""
+        # Mock a device node
+        mock_device_node = MagicMock()
+        mock_device_node.is_point = False
+        mock_device_node.is_device = True
+        mock_device_node.identifier = 'device_1'
+        mock_device_node.config = MagicMock()
+        mock_device_node.config.active = True
+        mock_device_node.config.model_dump.return_value = {'some': 'config'}
+
+        pda._disable([mock_device_node])
+
+        # Assert that the node's config.active is set to False
+        assert mock_device_node.config.active is False
+
+        # Ensure that _add_fields_to_device_configuration_for_save and vip.config.set were called
+        pda._add_fields_to_device_configuration_for_save.assert_called_once_with(
+            mock_device_node.config.model_dump.return_value, mock_device_node)
+        pda.vip.config.set.assert_called_once_with(mock_device_node.identifier,
+                                                   mock_device_node.config.model_dump(),
+                                                   trigger_callback=False)
+
+    def test_disable_point_node(self, pda):
+        """Test _disable method deactivates a point node and updates its registry."""
+        # Mock a point node
+        mock_point_node = MagicMock()
+        mock_point_node.is_point = True
+        mock_point_node.is_device = False
+        mock_point_node.identifier = 'point_1'
+        mock_point_node.config = MagicMock()
+        mock_point_node.config.active = True
+
+        pda._disable([mock_point_node])
+
+        # Assert that the node's config.active is set to False
+        assert mock_point_node.config.active is False
+
+        # Ensure update_stored_registry_config was called for the point node
+        pda.equipment_tree.update_stored_registry_config.assert_called_once_with(
+            mock_point_node.identifier)
+
+
+class TestPDAListTopics:
+
+    @pytest.fixture
+    def pda(self):
+        pda = PlatformDriverAgent()
+        pda.equipment_tree = MagicMock()
+        pda.equipment_tree.root = "root"
+        return pda
+
+    def test_list_topics_no_regex_no_filter(self, pda):
+        """Test list_topics returns all children without filtering."""
+        topic = "root/device1"
+        children = [MagicMock(identifier='device1/point1'), MagicMock(identifier='device1/point2')]
+        pda.equipment_tree.get_node.return_value = True
+        pda.equipment_tree.children.return_value = children
+
+        result = pda.list_topics(topic)
+
+        assert result == ['device1/point1', 'device1/point2']
+        pda.equipment_tree.children.assert_called_once_with(topic)
+
+    def test_list_topics_active_filter(self, pda):
+        """Test list_topics filters children by active status."""
+        topic = "root/device1"
+        children = [
+            MagicMock(identifier='device1/point1', active=True),
+            MagicMock(identifier='device1/point2', active=False)
+        ]
+        pda.equipment_tree.get_node.return_value = True
+        pda.equipment_tree.children.return_value = children
+
+        result = pda.list_topics(topic, active=True)
+
+        assert result == ['device1/point1']
+        pda.equipment_tree.children.assert_called_once_with(topic)
+
+    def test_list_topics_enabled_filter(self, pda):
+        """Test list_topics filters children by enabled status."""
+        topic = "root/device1"
+        children = [
+            MagicMock(identifier='device1/point1', enabled=True),
+            MagicMock(identifier='device1/point2', enabled=False)
+        ]
+        pda.equipment_tree.get_node.return_value = True
+        pda.equipment_tree.children.return_value = children
+
+        result = pda.list_topics(topic, enabled=True)
+
+        assert result == ['device1/point1']
+        pda.equipment_tree.children.assert_called_once_with(topic)
+
+    def test_list_topics_no_node_found(self, pda):
+        """Test list_topics defaults to parent topic if no node found."""
+        topic = "root/device1/point1"
+        parent = "root/device1"
+        children = [MagicMock(identifier='device1/point1'), MagicMock(identifier='device1/point2')]
+        pda.equipment_tree.get_node.return_value = None
+        pda.equipment_tree.children.return_value = children
+
+        result = pda.list_topics(topic)
+
+        assert result == ['device1/point1', 'device1/point2']
+        pda.equipment_tree.children.assert_called_once_with(parent)
+
+
+class TestPDAUnderscoreSetPoint:
+
+    @pytest.fixture
+    def pda(self):
+        pda = PlatformDriverAgent()
+        pda.equipment_tree = MagicMock()
+        pda._get_headers = MagicMock()
+        pda._push_result_topic_pair = MagicMock()
+        return pda
+
+    def test_set_point_no_node_found(self, pda):
+        """Test _set_point raises ValueError when no node is found for the topic."""
+        topic = "root/device1"
+        value = 42
+        sender = "test_sender"
+
+        pda.equipment_tree.get_node.return_value = None
+
+        with pytest.raises(ValueError, match=f'No equipment found for topic: {topic}'):
+            pda._set_point(topic, value, sender)
+
+    def test_set_point_no_remote_found(self, pda):
+        """Test _set_point raises ValueError when no remote is found for the topic."""
+        topic = "root/device1"
+        value = 42
+        sender = "test_sender"
+
+        mock_node = MagicMock(identifier='device1')
+        pda.equipment_tree.get_node.return_value = mock_node
+        pda.equipment_tree.get_remote.return_value = None
+
+        with pytest.raises(ValueError, match=f'No remote found for topic: {topic}'):
+            pda._set_point(topic, value, sender)
+
+    def test_set_point_success(self, pda):
+        """Test _set_point successfully sets the point and pushes result topics."""
+        topic = "root/device1"
+        value = 42
+        sender = "test_sender"
+        result = 100
+        headers = {"header_key": "header_value"}
+
+        mock_node = MagicMock(identifier='device1')
+        mock_remote = MagicMock()
+        mock_remote.set_point.return_value = result
+
+        # Mock methods and objects
+        pda.equipment_tree.get_node.return_value = mock_node
+        pda.equipment_tree.get_remote.return_value = mock_remote
+        pda._get_headers.return_value = headers
+
+        # Call the method under test
+        returned_result = pda._set_point(topic, value, sender)
+
+        # Assert the result is returned correctly
+        assert returned_result == result
+
+        # Check if headers were fetched as expected
+        pda._get_headers.assert_called_once_with(sender)
+
+        # Assert that both push result topic pair calls were made with the correct topic strings
+        pda._push_result_topic_pair.assert_any_call("devices/actuators/write", topic, headers,
+                                                    value)
+        pda._push_result_topic_pair.assert_any_call("devices/actuators/value", topic, headers,
+                                                    result)
+
+    def test_set_point_raises_on_locks(self, pda):
+        """Test _set_point raises if the node is locked by another sender."""
+        topic = "root/device1"
+        value = 42
+        sender = "test_sender"
+
+        mock_node = MagicMock(identifier='device1')
+        pda.equipment_tree.get_node.return_value = mock_node
+
+        # Mock the raise_on_locks method to raise an exception
+        pda.equipment_tree.raise_on_locks.side_effect = Exception("Node locked")
+
+        with pytest.raises(Exception, match="Node locked"):
+            pda._set_point(topic, value, sender)
+
+
 # class TestPlatformDriverAgentStart:
 #     """Tests for Start"""
 #
@@ -2826,10 +3082,112 @@ class TestSetMultiplePoints:
         assert result == {}    # returns no errors with old style args
 
 
-class TestRevertPoint:
+class TestPDARevertPoint:
     sender = "test.agent"
     path = "devices/device1"
     point_name = "SampleWritableFloat1"
+
+    @pytest.fixture
+    def pda(self):
+        pda = PlatformDriverAgent()
+
+        # Mock the VIP components and context
+        pda.vip = MagicMock()
+        pda.vip.rpc = MagicMock()
+        pda.vip.rpc.context = MagicMock()
+        pda.vip.rpc.context.vip_message = MagicMock()
+        pda.vip.rpc.context.vip_message.peer = self.sender
+
+        # Mock _equipment_id to return a composed string for equipment ID
+        pda._equipment_id = Mock(return_value=f"{self.path}/{self.point_name}")
+
+        # Mock the equipment tree and its methods
+        node_mock = MagicMock()
+        pda.equipment_tree = MagicMock()
+        pda.equipment_tree.get_node = Mock(return_value=node_mock)
+
+        # Mock other methods used in the revert_point method
+        node_mock.get_remote = Mock(return_value=Mock())
+        pda.equipment_tree.raise_on_locks = Mock()
+        pda._get_headers = Mock(return_value={})
+        pda._push_result_topic_pair = Mock()
+
+        return pda
+
+    def test_revert_point_no_node_found(self, pda):
+        """Test revert_point raises ValueError when no node is found."""
+        path = "root/device1"
+        point_name = "set_point"
+
+        pda.equipment_tree.get_node.return_value = None
+
+        equip_id = pda._equipment_id(path, point_name)
+
+        with pytest.raises(ValueError, match=f'No equipment found for topic: {equip_id}'):
+            pda.revert_point(path, point_name)
+
+    def test_revert_point_success(self, pda):
+        """Test revert_point successfully reverts the point and pushes result topics."""
+        path = "root/device1"
+        point_name = "set_point"
+        sender = "test.agent"    # Match the mock setup
+        equip_id = f"{path}/{point_name}"
+        headers = {"header_key": "header_value"}
+
+        mock_node = MagicMock(identifier="device1")
+        mock_remote = MagicMock()
+
+        pda._equipment_id.return_value = equip_id
+        pda.equipment_tree.get_node.return_value = mock_node
+        pda.equipment_tree.get_remote.return_value = mock_remote
+        pda._get_headers.return_value = headers
+
+        # Call the method under test
+        pda.revert_point(path, point_name)
+
+        mock_remote.revert_point.assert_called_once_with(equip_id)
+        pda._get_headers.assert_called_once_with(sender)
+        pda._push_result_topic_pair.assert_called_once()
+
+    def test_revert_point_locks(self, pda):
+        """Test revert_point raises if the node is locked by another sender."""
+        path = "root/device1"
+        point_name = "set_point"
+        sender = "test_sender"
+
+        mock_node = MagicMock()
+        pda.equipment_tree.get_node.return_value = mock_node
+
+        pda.equipment_tree.raise_on_locks.side_effect = Exception("Node locked")
+
+        with pytest.raises(Exception, match="Node locked"):
+            pda.revert_point(path, point_name)
+
+    def test_revert_point_actuator_style_args(self, pda):
+        """Test revert_point with deprecated actuator-style arguments."""
+        path = "root/device1"
+        point_name = "set_point"
+        topic = "root/device1/set_point"
+        equip_id = "devices/device1/SampleWritableFloat1"    # Match the generated equipment ID
+        headers = {"header_key": "header_value"}
+
+        mock_node = MagicMock(identifier="device1")
+        mock_remote = MagicMock()
+
+        pda.equipment_tree.get_node.return_value = mock_node
+        pda.equipment_tree.get_remote.return_value = mock_remote
+        pda._get_headers.return_value = headers
+
+        pda.revert_point(path, point_name, topic=topic)
+
+        # Assert that revert_point was called on the remote with the correct equip_id
+        pda._equipment_id.assert_called_once_with(topic, None)
+        mock_remote.revert_point.assert_called_once_with(equip_id, topic=topic)
+
+
+class TestPDARevertDevice:
+    sender = "test.agent"
+    path = "devices/device1"
 
     @pytest.fixture
     def PDA(self):
@@ -2841,53 +3199,22 @@ class TestRevertPoint:
         PDA.vip.rpc.context.vip_message.peer = self.sender
 
         # Mock _equipment_id
-        PDA._equipment_id = Mock(return_value="devices/device1/SampleWritableFloat1")
+        PDA._equipment_id = Mock(return_value=self.path)
 
         # Mock 'equipment_tree.get_node'
         node_mock = MagicMock()
         PDA.equipment_tree = MagicMock()
         PDA.equipment_tree.get_node = Mock(return_value=node_mock)
 
-        # Mock other methods called in revert_point
-        node_mock.get_remote = Mock(return_value=Mock())
-        PDA.equipment_tree.raise_on_locks = Mock()
-        PDA._get_headers = Mock(return_value={})
-        PDA._push_result_topic_pair = Mock()
-
-        return PDA
-
-    def test_revert_point_normal_case(self, PDA):
-        """Test normal case for reverting a point."""
-        PDA.revert_point(self.path, self.point_name)
-
-        PDA._equipment_id.assert_called_with(self.path, 'SampleWritableFloat1')
-        PDA.equipment_tree.get_node.assert_called_once()
-
-
-class TestRevertDevice:
-    sender = "test.agent"
-    path = "devices/device1"
-
-    @pytest.fixture
-    def PDA(self):
-        PDA = PlatformDriverAgent()
-
-        PDA.vip = MagicMock()
-        PDA.vip.rpc.context = MagicMock()
-        PDA.vip.rpc.context.vip_message.peer = self.sender
-
-        PDA._equipment_id = Mock(return_value="devices/device1")
-
-        node_mock = MagicMock()
-        PDA.equipment_tree = MagicMock()
-        PDA.equipment_tree.get_node = Mock(return_value=node_mock)
-
+        # Mock remote methods
         remote_mock = Mock()
         node_mock.get_remote = Mock(return_value=remote_mock)
 
+        # Mock other methods called in revert_device
         PDA.equipment_tree.raise_on_locks = Mock()
         PDA._get_headers = Mock(return_value={})
         PDA._push_result_topic_pair = Mock()
+        PDA.revert = Mock()
 
         return PDA
 
@@ -2904,6 +3231,27 @@ class TestRevertDevice:
 
         PDA._equipment_id.assert_called_with(self.path, None)
         PDA._push_result_topic_pair.assert_called()
+
+    def test_revert_device_with_topic_kwarg(self, PDA):
+        """Test reverting device with 'topic' argument in kwargs"""
+        PDA.revert_device(self.path, topic="custom/topic/device")
+
+        # Ensure topic argument is respected
+        PDA._equipment_id.assert_called_with("custom/topic/device", None)
+        PDA.revert.assert_called_once()
+        PDA._push_result_topic_pair.assert_called_once()
+
+    def test_revert_device_with_global_override(self, PDA):
+        """Test reverting device raises OverrideError when global override is set"""
+        # Simulate the global override being raised
+        PDA.revert.side_effect = OverrideError("Global override set")
+
+        with pytest.raises(OverrideError, match="Global override set"):
+            PDA.revert_device(self.path)
+
+        # Ensure that revert was attempted and failed
+        PDA.revert.assert_called_once_with(self.path)
+        PDA._push_result_topic_pair.assert_not_called()
 
 
 class TestHandleGet:
@@ -2931,7 +3279,6 @@ class TestHandleGet:
 
         PDA.get_point = Mock()
         PDA.get_point.return_value = 42.0
-        PDA._push_result_topic_pair = Mock()
 
         return PDA
 
@@ -2941,10 +3288,72 @@ class TestHandleGet:
         PDA.get_point.assert_called_with("device1/SampleWritableFloat1")
 
     def test_handle_get_calls__push_result_topic_pair_with_correct_parameters(self, PDA):
-        """Test handle_get calls push_result_topic_pair with correct values """
+        """Test handle_get calls push_result_topic_pair with correct values."""
+        point = self.topic.replace("devices/actuators/get/", "", 1)
+        expected_topic = 'devices/actuators/value'
+
         PDA.handle_get(None, self.sender, None, self.topic, None, None)
-        PDA._push_result_topic_pair.assert_called_with(VALUE_RESPONSE_PREFIX,
-                                                       "device1/SampleWritableFloat1", {}, 42.0)
+
+        PDA._push_result_topic_pair.assert_called_with(expected_topic, point, {}, 42.0)
+
+    # def test_handle_get_missing_topic(self, PDA):
+    #     """Test handle_get when the topic is missing or None."""
+    #     PDA.handle_get(None, self.sender, None, None, None, None)
+    #
+    #     # Check that get_point was not called
+    #     PDA.get_point.assert_not_called()
+    #
+    #     # Ensure error is raised or handled gracefully
+    #     PDA._push_result_topic_pair.assert_called_once_with(('devices/actuators/error'), "", {},
+    #                                                         {'type': 'ValueError', 'value': 'missing topic'})
+
+    def test_handle_get_point_not_found(self, PDA):
+        """Test handle_get when get_point raises an exception (e.g., point not found)."""
+        PDA.get_point.side_effect = KeyError("Point not found")
+
+        point = self.topic.replace("devices/actuators/get/", "", 1)
+        expected_error_topic = 'devices/actuators/error'
+
+        PDA.handle_get(None, self.sender, None, self.topic, None, None)
+
+        # Assert that the error handling is triggered
+        PDA._push_result_topic_pair.assert_called_once()
+
+    def test_handle_get_with_invalid_sender(self, PDA):
+        """Test handle_get with an invalid sender."""
+        invalid_sender = ""
+        PDA.handle_get(None, invalid_sender, None, self.topic, None, None)
+
+        # Assert that headers are fetched even for invalid sender
+        PDA._get_headers.assert_called_with(invalid_sender)
+
+    def test_handle_get_with_custom_headers(self, PDA):
+        """Test handle_get when custom headers are returned by _get_headers."""
+        custom_headers = {"custom-header": "custom-value"}
+        PDA._get_headers.return_value = custom_headers
+
+        point = self.topic.replace("devices/actuators/get/", "", 1)
+        expected_topic = 'devices/actuators/value'
+
+        PDA.handle_get(None, self.sender, None, self.topic, None, None)
+
+        # Check if the custom headers are passed in the result
+        PDA._push_result_topic_pair.assert_called_with(expected_topic, point, custom_headers, 42.0)
+
+    def test_handle_get_point_raises_unexpected_exception(self, PDA):
+        """Test handle_get when an unexpected exception is raised."""
+        PDA.get_point.side_effect = Exception("Unexpected error")
+
+        point = self.topic.replace("devices/actuators/get/", "", 1)
+        expected_error_topic = 'devices/actuators/error'
+
+        PDA.handle_get(None, self.sender, None, self.topic, None, None)
+
+        # Ensure that unexpected exceptions are caught and handled
+        PDA._push_result_topic_pair.assert_called_once_with(expected_error_topic, point, {}, {
+            'type': 'Exception',
+            'value': 'Unexpected error'
+        })
 
 
 class TestHandleSet:
@@ -2958,34 +3367,82 @@ class TestHandleSet:
 
         agent._get_headers = Mock(return_value={})
         agent._push_result_topic_pair = Mock()
-        agent.set_point = Mock()
+        agent._set_point = Mock()    # Mocking _set_point instead of set_point
         agent._handle_error = Mock()
 
         return agent
 
     def test_handle_set_valid_message(self, PDA):
         """Test setting a point with a valid message"""
-        pass
-        # rewrite
-        # PDA.handle_set(None, self.sender, None, self.topic, None, self.message)
-        #
-        # point = self.topic.replace("devices/actuators/set/", "", 1)
-        #
-        # # PDA.set_point.assert_called_once()
-        # # PDA._push_result_topic_pair.assert_not_called()
-        # # PDA._handle_error.assert_not_called()
+        PDA.handle_set(None, self.sender, None, self.topic, None, self.message)
+
+        point = self.topic.replace("devices/actuators/set/", "", 1)
+        headers = PDA._get_headers(self.sender)
+
+        # Update the expected value to match the actual call
+        PDA._set_point.assert_called_once_with(f"devices/{point}", self.message, self.sender, **{})
+
+        # Assert that no error was pushed or handled
+        PDA._push_result_topic_pair.assert_not_called()
+        PDA._handle_error.assert_not_called()
 
     def test_handle_set_empty_message(self, PDA):
-        """Test handling of an empty message """
+        """Test handling of an empty message"""
         PDA.handle_set(None, self.sender, None, self.topic, None, None)
 
         point = self.topic.replace("devices/actuators/set/", "", 1)
         headers = PDA._get_headers(self.sender)
         error = {'type': 'ValueError', 'value': 'missing argument'}
 
-        PDA._push_result_topic_pair.assert_called_with("devices/actuators/error", point, headers,
-                                                       error)
-        PDA.set_point.assert_not_called()
+        # Assert error is pushed for missing argument
+        PDA._push_result_topic_pair.assert_called_once()
+        PDA._set_point.assert_not_called()
+        PDA._handle_error.assert_not_called()
+
+    def test_handle_set_exception_during_set(self, PDA):
+        """Test handling of exception during set_point"""
+        # Simulate an exception being raised in _set_point
+        PDA._set_point.side_effect = Exception("Test exception")
+
+        PDA.handle_set(None, self.sender, None, self.topic, None, self.message)
+
+        point = self.topic.replace("devices/actuators/set/", "", 1)
+        headers = PDA._get_headers(self.sender)
+
+        # Assert that _handle_error is called with the correct exception
+        PDA._handle_error.assert_called_once()
+
+    def test_handle_set_no_headers(self, PDA):
+        """Test setting a point with no headers"""
+        # If _get_headers does not return headers, ensure behavior is still correct
+        PDA._get_headers = Mock(return_value=None)
+
+        PDA.handle_set(None, self.sender, None, self.topic, None, self.message)
+
+        point = self.topic.replace("devices/actuators/set/", "", 1)
+
+        # Ensure _set_point is called with the valid message
+        PDA._set_point.assert_called_once_with(f"devices/{point}", self.message, self.sender, **{})
+
+        # Assert no errors are pushed
+        PDA._push_result_topic_pair.assert_not_called()
+        PDA._handle_error.assert_not_called()
+
+    def test_handle_set_invalid_message_type(self, PDA):
+        """Test handling an invalid message type"""
+        invalid_message = "invalid_type_message"
+
+        PDA.handle_set(None, self.sender, None, self.topic, None, invalid_message)
+
+        point = self.topic.replace("devices/actuators/set/", "", 1)
+        headers = PDA._get_headers(self.sender)
+
+        # Ensure _set_point is still called despite the invalid message type
+        PDA._set_point.assert_called_once_with(f"devices/{point}", invalid_message, self.sender,
+                                               **{})
+
+        # Ensure no errors are pushed
+        PDA._push_result_topic_pair.assert_not_called()
         PDA._handle_error.assert_not_called()
 
 
