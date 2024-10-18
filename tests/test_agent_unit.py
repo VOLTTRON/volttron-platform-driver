@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import MagicMock, Mock, patch, call
+from unittest.mock import MagicMock, Mock, patch, call, ANY
 from datetime import datetime
 import gevent
 from typing import Set, Dict
@@ -11,6 +11,14 @@ from platform_driver.overrides import OverrideError
 from platform_driver.reservations import ReservationLockError
 from platform_driver.constants import VALUE_RESPONSE_PREFIX, RESERVATION_RESULT_TOPIC
 from platform_driver.equipment import EquipmentNode
+from volttron.utils.jsonrpc import RemoteError
+
+from volttron.client.messaging import topics as t
+
+VALUE_RESPONSE_PREFIX = t.ACTUATOR_VALUE()
+REVERT_POINT_RESPONSE_PREFIX = t.ACTUATOR_REVERTED_POINT()
+REVERT_DEVICE_RESPONSE_PREFIX = t.ACTUATOR_REVERTED_DEVICE()
+ERROR_RESPONSE_PREFIX = t.ACTUATOR_ERROR()
 
 
 class TestPDALoadAgentConfig:
@@ -3497,144 +3505,145 @@ class TestHandleRevertPoint:
         agent_instance._handle_error.assert_called_with(exception, expected_topic, headers)
 
 
-# class TestHandleRevertDevice:
-#     sender = "test.sender"
-#     topic = "devices/actuators/revert/device/device1"
-#
-#     @pytest.fixture
-#     def PDA(self):
-#         agent = PlatformDriverAgent()
-#
-#         agent._get_headers = Mock(return_value={})
-#         agent._push_result_topic_pair = Mock()
-#         agent._handle_error = Mock()
-#
-#         mock_node = Mock()
-#         mock_remote = Mock()
-#         mock_node.get_remote.return_value = mock_remote
-#         equipment_tree_mock = Mock()
-#         equipment_tree_mock.get_node.return_value = mock_node
-#         equipment_tree_mock.root = 'devices'
-#
-#         agent.equipment_tree = equipment_tree_mock
-#
-#         return agent, mock_node, mock_remote
-#
-#     def test_handle_revert_device_success(self, PDA):
-#         """Test reverting a device successfully."""
-#         agent, mock_node, mock_remote = PDA
-#         agent.handle_revert_device(None, self.sender, None, self.topic, None, None)
-#
-#         expected_topic = "devices/device1"
-#         headers = agent._get_headers(self.sender)
-#
-#         agent.equipment_tree.get_node.assert_called_with(expected_topic)
-#         agent.equipment_tree.raise_on_locks.assert_called_with(mock_node, self.sender)
-#         mock_remote.revert_all.assert_called_once()
-#         agent._push_result_topic_pair.assert_called_with("devices/actuators/reverted/device",
-#                                                          expected_topic, headers, None)
-#         agent._handle_error.assert_not_called()
-#
-#     def test_handle_revert_device_exception(self, PDA):
-#         """Test handling exception during revert process """
-#         agent_instance, mock_node, mock_remote = PDA
-#         exception = Exception("test exception")
-#         agent_instance.equipment_tree.get_node.side_effect = exception
-#         agent_instance.handle_revert_device(None, self.sender, None, self.topic, None, None)
-#
-#         expected_topic = "devices/device1"
-#         headers = agent_instance._get_headers(self.sender)
-#
-#         agent_instance.equipment_tree.get_node.assert_called_with(expected_topic)
-#         agent_instance._handle_error.assert_called_with(exception, expected_topic, headers)
+class TestHandleRevertDevice:
+    sender = "test.agent"
+    topic = "devices/actuators/revert/device1"
 
-# class TestHandleReservationRequest:
-#
-#     @pytest.fixture
-#     def PDA(self):
-#         PDA = PlatformDriverAgent()
-#
-#         # Mock dependencies
-#         PDA.vip = MagicMock()
-#         PDA.vip.pubsub.publish = MagicMock()
-#         PDA._get_headers = Mock()
-#         PDA.reservation_manager = Mock()
-#         PDA._handle_unknown_reservation_error = Mock()
-#         PDA.reservation_manager.cancel_reservation = Mock()
-#
-#         return PDA
-#
-#     def test_handle_reservation_request_calls_publish_pubsub(self, PDA):
-#         """Tests that it calls pubsub.publish when result type is new reservation"""
-#         headers = {'type': 'NEW_RESERVATION', 'taskID': 'task1', 'priority': 1}
-#         message = ['request1']
-#
-#         result = Mock()
-#         result.success = True
-#         result.data = {}
-#         result.info_string = ''
-#
-#         PDA._get_headers.return_value = {}
-#         PDA.reservation_manager.new_task.return_value = result
-#
-#         PDA.handle_reservation_request(None, 'sender', None, 'topic', headers, message)
-#
-#         PDA.vip.pubsub.publish.assert_called_with('pubsub',
-#                                                   topic=RESERVATION_RESULT_TOPIC,
-#                                                   headers={},
-#                                                   message={
-#                                                       'result': 'SUCCESS',
-#                                                       'data': {},
-#                                                       'info': ''
-#                                                   })
-#
-#     def test_handle_reservation_reservation_action_cancel(self, PDA):
-#         """Tests that it calls pubsub.publish when result type is cancel reservation"""
-#         headers = {'type': 'CANCEL_RESERVATION', 'taskID': 'task1', 'priority': 1}
-#         message = ['request1']
-#
-#         result = Mock()
-#         result.success = True
-#         result.data = {}
-#         result.info_string = ''
-#
-#         PDA._get_headers.return_value = {}
-#         PDA.reservation_manager.cancel_reservation.return_value = result
-#
-#         PDA.handle_reservation_request(None, 'sender', None, 'topic', headers, message)
-#
-#         PDA.vip.pubsub.publish.assert_called_with('pubsub',
-#                                                   topic=RESERVATION_RESULT_TOPIC,
-#                                                   headers={},
-#                                                   message={
-#                                                       'result': 'SUCCESS',
-#                                                       'data': {},
-#                                                       'info': ''
-#                                                   })
-#
-#     def test_handle_reservation_request_calls_publish_pubsub(self, PDA):
-#         """Tests that it calls pubsub.publish when new_task result responds with failed"""
-#         headers = {'type': 'NEW_RESERVATION', 'taskID': 'task1', 'priority': 1}
-#         message = ['request1']
-#
-#         result = Mock()
-#         result.success = False
-#         result.data = {}
-#         result.info_string = ''
-#
-#         PDA._get_headers.return_value = {}
-#         PDA.reservation_manager.new_task.return_value = result
-#
-#         PDA.handle_reservation_request(None, 'sender', None, 'topic', headers, message)
-#
-#         PDA.vip.pubsub.publish.assert_called_with('pubsub',
-#                                                   topic=RESERVATION_RESULT_TOPIC,
-#                                                   headers={},
-#                                                   message={
-#                                                       'result': 'FAILURE',
-#                                                       'data': {},
-#                                                       'info': ''
-#                                                   })
+    @pytest.fixture
+    def PDA(self):
+        PDA = PlatformDriverAgent()
+
+        # Mock 'vip' components
+        PDA.vip = MagicMock()
+        PDA.vip.rpc.context = MagicMock()
+        PDA.vip.rpc.context.vip_message.peer = self.sender
+
+        PDA._equipment_id = Mock(return_value="processed_device_name")
+
+        # Mock 'equipment_tree' methods
+        PDA.equipment_tree = MagicMock()
+        PDA.equipment_tree.get_device = Mock(return_value="mock_device")
+        PDA.equipment_tree.raise_on_locks = Mock()
+
+        PDA._get_headers = Mock(return_value={})
+        PDA._push_result_topic_pair = Mock()
+        PDA.revert = Mock()
+
+        return PDA
+
+    def test_handle_revert_device_success(self, PDA):
+        """Test handling a successful device revert."""
+        PDA.handle_revert_device(None, self.sender, None, self.topic, None, None)
+
+        # Ensure the device ID is processed correctly
+        PDA._equipment_id.assert_called_once()
+
+        # Ensure revert was called with the correct device
+        PDA.revert.assert_called_with("mock_device")
+
+        # Ensure result is pushed
+        PDA._push_result_topic_pair.assert_called_once()
+
+    def test_handle_revert_device_missing_topic(self, PDA):
+        """Test handle_revert_device when the topic is missing or None."""
+        with pytest.raises(AttributeError):
+            PDA.handle_revert_device(None, self.sender, None, None, None, None)
+
+    def test_handle_revert_device_with_lock_error(self, PDA):
+        """Test handle_revert_device when a lock error occurs."""
+        PDA.equipment_tree.raise_on_locks.side_effect = Exception("Lock error")
+
+        PDA.handle_revert_device(None, self.sender, None, self.topic, None, None)
+
+        # Ensure revert was not called
+        PDA.revert.assert_not_called()
+
+
+class TestPDAHandleReservationRequest:
+    sender = "test.agent"
+    topic = "devices/actuators/schedule/request"
+    valid_headers_new = {'type': 'NEW_SCHEDULE', 'taskID': 'test-task-id', 'priority': 'HIGH'}
+    valid_headers_cancel = {'type': 'CANCEL_SCHEDULE', 'taskID': 'test-task-id'}
+    invalid_headers = {'type': 'INVALID_TYPE', 'taskID': 'test-task-id'}
+    message = [['2024-10-18T10:00:00Z', '2024-10-18T11:00:00Z']]    # Sample time block
+
+    @pytest.fixture
+    def PDA(self):
+        agent = PlatformDriverAgent()
+
+        # Mock required components and methods
+        agent.vip = MagicMock()
+        agent.vip.pubsub.publish = Mock()
+
+        agent.reservation_manager = MagicMock()
+        agent.reservation_manager.new_task = Mock(return_value=Mock(success=True, data=[]))
+        agent.reservation_manager.cancel_reservation = Mock(
+            return_value=Mock(success=True, info_string=""))
+
+        agent._get_headers = Mock()
+        agent._handle_unknown_reservation_error = Mock()
+
+        return agent
+
+    def test_handle_reservation_request_new_schedule(self, PDA):
+        """Test NEW_SCHEDULE request handling"""
+        PDA.handle_reservation_request(None, self.sender, None, self.topic, self.valid_headers_new,
+                                       self.message)
+
+        # Assert new_task is called with correct parameters
+        PDA.reservation_manager.new_task.assert_called_once_with(self.sender, 'test-task-id',
+                                                                 'HIGH', self.message[0], ANY)
+
+        # Assert the success result is published
+        PDA.vip.pubsub.publish.assert_called()
+
+    def test_handle_reservation_request_cancel_schedule(self, PDA):
+        """Test CANCEL_SCHEDULE request handling"""
+        PDA.handle_reservation_request(None, self.sender, None, self.topic,
+                                       self.valid_headers_cancel, self.message)
+
+        # Assert cancel_reservation is called with correct parameters
+        PDA.reservation_manager.cancel_reservation.assert_called_once_with(
+            self.sender, 'test-task-id')
+
+        # Assert the success result is published
+        PDA.vip.pubsub.publish.assert_called()
+
+    def test_handle_reservation_request_invalid_request_type(self, PDA):
+        """Test handling of an invalid request type"""
+        PDA.handle_reservation_request(None, self.sender, None, self.topic, self.invalid_headers,
+                                       self.message)
+
+        # Assert no task creation or cancellation happens for invalid request type
+        PDA.reservation_manager.new_task.assert_not_called()
+        PDA.reservation_manager.cancel_reservation.assert_not_called()
+
+        # Assert the failure result is published for invalid request type
+        PDA.vip.pubsub.publish.assert_called_with('pubsub', ANY, self.invalid_headers, {
+            'result': 'FAILURE',
+            'info': 'INVALID_REQUEST_TYPE',
+            'data': {}
+        })
+
+    def test_handle_reservation_request_new_schedule_error(self, PDA):
+        """Test NEW_SCHEDULE request with an exception in processing"""
+        PDA.reservation_manager.new_task.side_effect = Exception("Test exception")
+
+        PDA.handle_reservation_request(None, self.sender, None, self.topic, self.valid_headers_new,
+                                       self.message)
+
+        # Assert that the exception is handled properly
+        PDA._handle_unknown_reservation_error.assert_called_once()
+
+    def test_handle_reservation_request_cancel_schedule_error(self, PDA):
+        """Test CANCEL_SCHEDULE request with an exception in processing"""
+        PDA.reservation_manager.cancel_reservation.side_effect = Exception("Test cancel exception")
+
+        PDA.handle_reservation_request(None, self.sender, None, self.topic,
+                                       self.valid_headers_cancel, self.message)
+
+        # Assert that the exception is handled properly
+        PDA._handle_unknown_reservation_error.assert_called_once()
 
 
 class TestEquipmentId:
@@ -3745,6 +3754,137 @@ class TestGetHeaders:
             'type': action_type
         }
         assert result == expected
+
+
+class TestHandleError:
+    point = "device/point"
+    headers = {"some-header": "header-value"}
+
+    @pytest.fixture
+    def PDA(self):
+        agent = PlatformDriverAgent()
+        agent._push_result_topic_pair = Mock()
+        return agent
+
+    def test_handle_error_remote_error_with_exc_info(self, PDA):
+        """Test handling a RemoteError with exc_info."""
+        exc_info = {'exc_type': 'TestError', 'exc_args': ['test_arg']}
+        remote_error = RemoteError("Remote error occurred", exc_info=exc_info)
+        PDA._handle_error(remote_error, "device1/point1", {})
+        PDA._push_result_topic_pair.assert_called_once()
+
+    def test_handle_error_non_remote_error(self, PDA):
+        """Test handling a non-RemoteError exception."""
+        generic_exception = ValueError("A value error occurred")
+
+        PDA._handle_error(generic_exception, self.point, self.headers)
+
+        error_message = {'type': 'ValueError', 'value': 'A value error occurred'}
+        PDA._push_result_topic_pair.assert_called_once_with(ERROR_RESPONSE_PREFIX, self.point,
+                                                            self.headers, error_message)
+
+    def test_handle_error_warning_log(self, PDA, caplog):
+        """Test that the warning log is correctly called during error handling."""
+        generic_exception = ValueError("A value error occurred")
+        with caplog.at_level('WARNING'):
+            PDA._handle_error(generic_exception, self.point, self.headers)
+        assert "Error handling subscription: {'type': 'ValueError', 'value': 'A value error occurred'}" in caplog.text
+
+
+class TestSplitTopic:
+
+    @pytest.fixture
+    def PDA(self):
+        PDA = PlatformDriverAgent()
+
+        PDA.equipment_tree = MagicMock()
+        PDA.equipment_tree.root = "root"
+
+        return PDA
+
+    def test_split_topic_with_point(self, PDA):
+        """Test splitting a topic when a point is provided."""
+        topic = "devices/building/floor1"
+        point = "SampleWritableFloat1"
+
+        path, point_name = PDA._split_topic(topic, point)
+
+        assert path == "root/devices/building/floor1"
+        assert point_name == "SampleWritableFloat1"
+
+    def test_split_topic_without_point(self, PDA):
+        """Test splitting a topic when no point is provided."""
+        topic = "devices/building/floor1/SampleWritableFloat1"
+
+        path, point_name = PDA._split_topic(topic)
+
+        assert path == "root/devices/building/floor1"
+        assert point_name == "SampleWritableFloat1"
+
+    def test_split_topic_already_has_root(self, PDA):
+        """Test when the topic already starts with the equipment_tree root."""
+        topic = "root/devices/building/floor1"
+        point = "SampleWritableFloat1"
+
+        path, point_name = PDA._split_topic(topic, point)
+
+        assert path == "root/devices/building/floor1"
+        assert point_name == "SampleWritableFloat1"
+
+    def test_split_topic_without_point_and_with_root(self, PDA):
+        """Test splitting a topic without a point but the root already included."""
+        topic = "root/devices/building/floor1/SampleWritableFloat1"
+
+        path, point_name = PDA._split_topic(topic)
+
+        assert path == "root/devices/building/floor1"
+        assert point_name == "SampleWritableFloat1"
+
+    def test_split_topic_trailing_slash(self, PDA):
+        """Test when topic contains trailing slashes."""
+        topic = "devices/building/floor1/SampleWritableFloat1/"
+
+        path, point_name = PDA._split_topic(topic)
+
+        assert path == "root/devices/building/floor1"
+        assert point_name == "SampleWritableFloat1"
+
+
+class TestHandleUnknownReservationError:
+
+    @pytest.fixture
+    def PDA(self):
+        # Mock the PDA object and the pubsub component
+        PDA = PlatformDriverAgent()
+        PDA.vip = MagicMock()
+        PDA.vip.pubsub.publish = MagicMock()
+        return PDA
+
+    def test_handle_unknown_reservation_error(self, PDA):
+        """Test handling of an unknown reservation error."""
+        # Prepare inputs
+        exception = ValueError("Test error message")
+        headers = {'type': 'TEST', 'requesterID': 'test_agent'}
+        message = [['device1', 'timeblock1'], ['device2', 'timeblock2']]
+
+        # Call the method
+        result = PDA._handle_unknown_reservation_error(exception, headers, message)
+
+        # Prepare expected result
+        expected_result = {
+            'result': "FAILURE",
+            'data': {},
+            'info': 'MALFORMED_REQUEST: ValueError: Test error message'
+        }
+
+        # Assert that the method returns the expected result
+        assert result == expected_result
+
+        # Assert that the pubsub publish method was called with the correct parameters
+        PDA.vip.pubsub.publish.assert_called_once_with('pubsub',
+                                                       RESERVATION_RESULT_TOPIC,
+                                                       headers=headers,
+                                                       message=expected_result)
 
 
 if __name__ == '__main__':
