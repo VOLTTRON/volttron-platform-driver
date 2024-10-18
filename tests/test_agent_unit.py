@@ -1582,7 +1582,7 @@ class TestPDASemanticSet:
         assert errors == expected_errors
 
 
-class TestUnderscoreSet:
+class TestPDAUnderscoreSet:
     """Tests for the _set function in platform_driver.agent."""
 
     def test_set_single_value_no_confirm(self):
@@ -1707,7 +1707,7 @@ class TestUnderscoreSet:
         assert errors["point2"] == "Set error", "'point2' should have the correct error message."
 
 
-class TestPlatformDriverAgentRevertMethods:
+class TestPDARevertMethods:
 
     @pytest.fixture
     def pda(self):
@@ -1976,7 +1976,7 @@ class TestPlatformDriverAgentRevertMethods:
         assert errors == expected_errors
 
 
-class TestPlatformDriverAgentLast:
+class TestPDAAgentLast:
     """Tests for Last"""
 
     @pytest.fixture
@@ -1998,6 +1998,327 @@ class TestPlatformDriverAgentLast:
         expected = {"point1": {"value": "value1", "updated": "2023-01-01T00:00:00Z"}}
         assert result == expected
         PDA.equipment_tree.find_points.assert_called_once_with("topic", None)
+
+
+class TestPDAUnderscoreLast:
+    """Tests for the _last static method in PlatformDriverAgent."""
+
+    def test_last_value_updated(self):
+        """Verify _last returns both value and updated information."""
+        # Arrange
+        point1 = Mock()
+        point1.topic = "topic1"
+        point1.last_value = "value1"
+        point1.last_updated = "2024-01-01T00:00:00Z"
+
+        point2 = Mock()
+        point2.topic = "topic2"
+        point2.last_value = "value2"
+        point2.last_updated = "2024-01-02T00:00:00Z"
+
+        points = [point1, point2]
+        value = True
+        updated = True
+
+        # Act
+        result = PlatformDriverAgent._last(points, value, updated)
+
+        # Assert
+        expected = {
+            "topic1": {
+                "value": "value1",
+                "updated": "2024-01-01T00:00:00Z"
+            },
+            "topic2": {
+                "value": "value2",
+                "updated": "2024-01-02T00:00:00Z"
+            }
+        }
+        assert result == expected
+
+    def test_last_value_only(self):
+        """Ensure _last returns only value information."""
+        # Arrange
+        point1 = Mock()
+        point1.topic = "topic1"
+        point1.last_value = "value1"
+        point1.last_updated = "2024-01-01T00:00:00Z"
+
+        point2 = Mock()
+        point2.topic = "topic2"
+        point2.last_value = "value2"
+        point2.last_updated = "2024-01-02T00:00:00Z"
+
+        points = [point1, point2]
+        value = True
+        updated = False
+
+        # Act
+        result = PlatformDriverAgent._last(points, value, updated)
+
+        # Assert
+        expected = {"topic1": "value1", "topic2": "value2"}
+        assert result == expected
+
+    def test_last_updated_only(self):
+        """Confirm _last returns only updated information."""
+        # Arrange
+        point1 = Mock()
+        point1.topic = "topic1"
+        point1.last_value = "value1"
+        point1.last_updated = "2024-01-01T00:00:00Z"
+
+        point2 = Mock()
+        point2.topic = "topic2"
+        point2.last_value = "value2"
+        point2.last_updated = "2024-01-02T00:00:00Z"
+
+        points = [point1, point2]
+        value = False
+        updated = True
+
+        # Act
+        result = PlatformDriverAgent._last(points, value, updated)
+
+        # Assert
+        expected = {"topic1": "2024-01-01T00:00:00Z", "topic2": "2024-01-02T00:00:00Z"}
+        assert result == expected
+
+
+class TestPDAStartAndStopMethods:
+    """Unit tests for PlatformDriverAgent's start, semantic_start, _start, stop, semantic_stop, and _stop methods."""
+
+    @pytest.fixture
+    def create_mock_point(self):
+        """
+        Fixture to create mock PointNode objects with specified attributes.
+
+        Returns:
+            A function that creates and returns a mock PointNode.
+        """
+
+        def _create_mock_point(active=False, identifier='point_id', topic='topic'):
+            point = Mock()
+            point.active = active
+            point.identifier = identifier
+            point.topic = topic
+            return point
+
+        return _create_mock_point
+
+    @pytest.fixture
+    def agent(self):
+        """
+        Fixture to create and configure a PlatformDriverAgent instance.
+        """
+        agent_instance = PlatformDriverAgent()
+        # Mock equipment_tree and poll_schedulers to isolate tests
+        agent_instance.equipment_tree = Mock()
+        agent_instance.poll_schedulers = {}
+        return agent_instance
+
+    # -------------------------------
+    # Tests for start and semantic_start
+    # -------------------------------
+
+    def test_start_with_topic(self, agent, create_mock_point):
+        """Verify that start finds points by topic and calls _start with them."""
+        # Arrange
+        # Create mock PointNodes
+        point1 = create_mock_point(active=False, identifier="point1_id", topic="topic1")
+        point2 = create_mock_point(active=False, identifier="point2_id", topic="topic2")
+        points = [point1, point2]
+
+        # Mock the find_points method to return the mock points
+        agent.equipment_tree.find_points.return_value = points
+
+        # Mock the _start method
+        with patch.object(agent, '_start') as mock_start:
+            # Act
+            agent.start(topic="topic1")
+
+            # Assert
+            agent.equipment_tree.find_points.assert_called_once_with("topic1", None)
+            mock_start.assert_called_once_with(points)
+
+    def test_semantic_start_with_query(self, agent, create_mock_point):
+        """Ensure that semantic_start processes a query, finds exact matches, and calls _start."""
+        # Arrange
+        # Mock the semantic_query method to return exact matches
+        with patch.object(agent, 'semantic_query',
+                          return_value=["exact_match_query"]) as mock_semantic_query:
+            # Create mock PointNodes
+            point1 = create_mock_point(active=False, identifier="point1_id", topic="topic1")
+            points = [point1]
+
+            # Mock the find_points method to return the mock point
+            agent.equipment_tree.find_points.return_value = points
+
+            # Mock the _start method
+            with patch.object(agent, '_start') as mock_start:
+                # Act
+                agent.semantic_start(query="some_query")
+
+                # Assert
+                mock_semantic_query.assert_called_once_with("some_query")
+                agent.equipment_tree.find_points.assert_called_once_with(["exact_match_query"])
+                mock_start.assert_called_once_with(points)
+
+    # -------------------------------
+    # Tests for _start method
+    # -------------------------------
+
+    def test_start_activates_inactive_points(self, agent, create_mock_point):
+        """Test that _start activates all inactive points."""
+        # Arrange
+        # Create mock PointNodes with active=False
+        point1 = create_mock_point(active=False, identifier="point1_id", topic="topic1")
+        point2 = create_mock_point(active=False, identifier="point2_id", topic="topic2")
+        points = [point1, point2]
+
+        # Mock the _update_polling_schedules method
+        with patch.object(agent, '_update_polling_schedules') as mock_update:
+            # Act
+            agent._start(points)
+
+            # Assert
+            # Check that each point's active attribute is set to True
+            assert point1.active is True, "point1 should be active after _start"
+            assert point2.active is True, "point2 should be active after _start"
+
+            # Verify that _update_polling_schedules was called once with the correct arguments
+            mock_update.assert_called_once_with(points)
+
+    def test__start_returns_early_if_any_point_active(self, agent, create_mock_point):
+        """Test that _start returns early and does not activate any points if any point is already active."""
+        # Arrange
+        # Create mock PointNodes
+        point1 = create_mock_point(active=True, identifier="point1_id",
+                                   topic="topic1")    # Already active
+        point2 = create_mock_point(active=False, identifier="point2_id", topic="topic2")
+        points = [point1, point2]
+
+        # Mock the _update_polling_schedules method
+        with patch.object(agent, '_update_polling_schedules') as mock_update:
+            # Act
+            agent._start(points)
+
+            # Assert
+            # Ensure that point1 remains active and point2 is not activated
+            assert point1.active is True, "Point1 was already active."
+            assert point2.active is False, "Point2 should remain inactive."
+
+            # Verify that _update_polling_schedules was not called
+            mock_update.assert_not_called()
+
+    # -------------------------------
+    # Tests for stop and semantic_stop
+    # -------------------------------
+
+    def test_stop_with_topic(self, agent, create_mock_point):
+        """Verify that stop finds points by topic and calls _stop with them."""
+        # Arrange
+        # Create mock PointNodes
+        point1 = create_mock_point(active=True, identifier="point1_id", topic="topic1")
+        point2 = create_mock_point(active=True, identifier="point2_id", topic="topic2")
+        points = [point1, point2]
+
+        # Mock the find_points method to return the mock points
+        agent.equipment_tree.find_points.return_value = points
+
+        # Mock the _stop method
+        with patch.object(agent, '_stop') as mock_stop:
+            # Act
+            agent.stop(topic="topic1")
+
+            # Assert
+            agent.equipment_tree.find_points.assert_called_once_with("topic1", None)
+            mock_stop.assert_called_once_with(points)
+
+    def test_semantic_stop_with_query(self, agent, create_mock_point):
+        """Ensure that semantic_stop processes a query, finds exact matches, and calls _stop."""
+        # Arrange
+        # Mock the semantic_query method to return exact matches
+        with patch.object(agent, 'semantic_query',
+                          return_value=["exact_match_query"]) as mock_semantic_query:
+            # Create mock PointNodes
+            point1 = create_mock_point(active=True, identifier="point1_id", topic="topic1")
+            points = [point1]
+
+            # Mock the find_points method to return the mock point
+            agent.equipment_tree.find_points.return_value = points
+
+            # Mock the _stop method
+            with patch.object(agent, '_stop') as mock_stop:
+                # Act
+                agent.semantic_stop(query="some_query")
+
+                # Assert
+                mock_semantic_query.assert_called_once_with("some_query")
+                agent.equipment_tree.find_points.assert_called_once_with(["exact_match_query"])
+                mock_stop.assert_called_once_with(points)
+
+    # -------------------------------
+    # Tests for _stop method
+    # -------------------------------
+
+    def test_stop_deactivates_active_points(self, agent, create_mock_point):
+        """Test that _stop deactivates all active points and removes them from schedules."""
+        # Arrange
+        # Create mock PointNodes with active=True
+        point1 = create_mock_point(active=True, identifier="point1_id", topic="topic1")
+        point2 = create_mock_point(active=True, identifier="point2_id", topic="topic2")
+        points = [point1, point2]
+
+        # Mock the equipment_tree.get_group method
+        agent.equipment_tree.get_group.side_effect = lambda identifier: f"group_{identifier}"
+
+        # Mock the poll_schedulers dictionary with mock schedulers
+        group1_scheduler = Mock()
+        group2_scheduler = Mock()
+        agent.poll_schedulers = {
+            "group_point1_id": group1_scheduler,
+            "group_point2_id": group2_scheduler
+        }
+
+        # Act
+        agent._stop(points)
+
+        # Assert
+        # Check that each point's active attribute is set to False
+        assert point1.active is False, "point1 should be inactive after _stop"
+        assert point2.active is False, "point2 should be inactive after _stop"
+
+        # Verify that get_group was called for each point
+        agent.equipment_tree.get_group.assert_any_call("point1_id")
+        agent.equipment_tree.get_group.assert_any_call("point2_id")
+        assert agent.equipment_tree.get_group.call_count == 2, "get_group should be called twice"
+
+        # Verify that remove_from_schedule was called for each point's group
+        group1_scheduler.remove_from_schedule.assert_called_once_with(point1)
+        group2_scheduler.remove_from_schedule.assert_called_once_with(point2)
+
+    def test__stop_returns_early_if_any_point_inactive(self, agent, create_mock_point):
+        """Test that _stop returns early and does not deactivate any points if any point is already inactive."""
+        # Arrange
+        # Create mock PointNodes
+        point1 = create_mock_point(active=False, identifier="point1_id",
+                                   topic="topic1")    # Already inactive
+        point2 = create_mock_point(active=True, identifier="point2_id", topic="topic2")
+        points = [point1, point2]
+
+        # Act
+        agent._stop(points)
+
+        # Assert
+        # Ensure that point1 remains inactive and point2 remains active (since method returns early)
+        assert point1.active is False, "Point1 was already inactive."
+        assert point2.active is True, "Point2 should remain active."
+
+        # Verify that get_group and remove_from_schedule were not called
+        agent.equipment_tree.get_group.assert_not_called()
+        for scheduler in agent.poll_schedulers.values():
+            scheduler.remove_from_schedule.assert_not_called()
 
 
 # class TestPlatformDriverAgentStart:
