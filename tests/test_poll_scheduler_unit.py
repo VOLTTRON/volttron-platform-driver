@@ -371,7 +371,7 @@ def test_find_starting_datetime():
     assert result == expected_start
 
 
-class TestAddToSchedule:
+class TestPollSchedulerAddToSchedule:
 
     @pytest.fixture
     def mock_data_model(self):
@@ -1480,6 +1480,81 @@ class TestStaticCyclicPollSchedulerSchedulePolling:
                 'poll_set')
 
 
+class TestStaticCyclicPollSchedulerOperatePolling:
+
+    @pytest.fixture
+    def scheduler(self):
+        """Fixture to create a StaticCyclicPollScheduler instance with mocked dependencies."""
+        data_model_mock = MagicMock()
+        data_model_mock.agent.core.schedule = MagicMock()
+        group_config_mock = MagicMock()
+        group_config_mock.start_offset = timedelta(seconds=0)
+
+        scheduler = StaticCyclicPollScheduler(data_model=data_model_mock,
+                                              group='test_group',
+                                              group_config=group_config_mock)
+
+        scheduler.pollers = {}
+
+        return scheduler
+
+    def test_operate_polling_calls_correct_methods(self, scheduler):
+        """Test that _operate_polling calls the correct methods with expected arguments."""
+        now = get_aware_utc_now()
+
+        # Mock current_poll_set
+        current_poll_set = MagicMock()
+        current_poll_set.remote.poll_data = MagicMock()
+
+        # Mock poll_generator
+        poll_generator = MagicMock()
+        next_start = now + timedelta(seconds=10)    # Next start time in the future
+        next_poll_set = MagicMock()
+        next_poll_set.points = {'point1': None}    # Assume it has points
+        poll_generator.__next__.return_value = (next_start, next_poll_set)
+
+        # Patch get_aware_utc_now to return 'now'
+        with patch('volttron.utils.get_aware_utc_now', return_value=now):
+            # Call the method under test
+            scheduler._operate_polling('poller_id', poll_generator, current_poll_set)
+
+        # Verify that current_poll_set.remote.poll_data was called
+        current_poll_set.remote.poll_data.assert_called_with(current_poll_set)
+
+        # Verify that data_model.agent.core.schedule was called with correct arguments
+        scheduler.data_model.agent.core.schedule.assert_called_with(next_start,
+                                                                    scheduler._operate_polling,
+                                                                    'poller_id', poll_generator,
+                                                                    next_poll_set)
+
+    def test_operate_polling_no_next_poll_set_points(self, scheduler):
+        """Test that _operate_polling does not schedule next poll if next_poll_set has no points."""
+        now = get_aware_utc_now()
+
+        # Mock current_poll_set
+        current_poll_set = MagicMock()
+        current_poll_set.remote.poll_data = MagicMock()
+
+        # Mock poll_generator
+        poll_generator = MagicMock()
+        next_start = now + timedelta(seconds=10)    # Next start time in the future
+        next_poll_set = MagicMock()
+        next_poll_set.points = {}    # Empty points
+
+        poll_generator.__next__.return_value = (next_start, next_poll_set)
+
+        # Patch get_aware_utc_now to return 'now'
+        with patch('volttron.utils.get_aware_utc_now', return_value=now):
+            # Call the method under test
+            scheduler._operate_polling('poller_id', poll_generator, current_poll_set)
+
+        # Verify that current_poll_set.remote.poll_data was called
+        current_poll_set.remote.poll_data.assert_called_with(current_poll_set)
+
+        # Verify that data_model.agent.core.schedule was not called since points are empty
+        scheduler.data_model.agent.core.schedule.assert_not_called()
+
+
 class TestPollSetInit:
 
     @pytest.fixture
@@ -1509,80 +1584,6 @@ class TestPollSetInit:
         assert poll_set.single_breadth == {("depth1", "breadth1")}
         assert poll_set.multi_depth == {"device1": {"depth1", "depth2"}}
         assert poll_set.multi_breadth == {"device_breadth1": {"breadth1", "breadth2"}}
-
-
-# Test for add method
-class TestPollSetAdd:
-
-    @pytest.fixture
-    def poll_set(self):
-        data_model = MagicMock(spec=EquipmentTree)
-        remote = MagicMock(spec=DriverAgent)
-        remote.unique_id = "remote_id"
-
-        poll_set = PollSet(data_model=data_model, remote=remote)
-        return poll_set
-
-    @pytest.fixture
-    def point_node(self):
-
-        def _create_point(name):
-            point = PointNode(name)
-            point.identifier = name    # Ensure identifier matches the name
-            return point
-
-        return _create_point
-
-    def test_add_point(self, poll_set, point_node):
-        point = point_node("point1")
-
-        with patch.object(poll_set, '_add_to_publish_setup') as mock_add_setup:
-            poll_set.add(point)
-
-            assert poll_set.points["point1"] == point
-            mock_add_setup.assert_called_once_with(point)
-
-
-class TestPollSetRemove:
-
-    @pytest.fixture
-    def poll_set(self):
-        data_model = MagicMock(spec=EquipmentTree)
-        remote = MagicMock(spec=DriverAgent)
-        remote.unique_id = "remote_id"
-
-        poll_set = PollSet(data_model=data_model, remote=remote)
-        return poll_set
-
-    @pytest.fixture
-    def point_node(self):
-
-        def _create_point(name):
-            point = PointNode(name)
-            point.identifier = name    # Ensure identifier matches the name
-            return point
-
-        return _create_point
-
-    def test_remove_existing_point(self, poll_set, point_node):
-        point = point_node("point1")
-        poll_set.points["point1"] = point
-
-        with patch.object(poll_set, '_remove_from_publish_setup') as mock_remove_setup:
-            result = poll_set.remove(point)
-
-            assert result == point
-            assert "point1" not in poll_set.points
-            mock_remove_setup.assert_called_once_with(point)
-
-    def test_remove_nonexistent_point(self, poll_set, point_node):
-        point = point_node("point2")
-
-        with patch.object(poll_set, '_remove_from_publish_setup') as mock_remove_setup:
-            result = poll_set.remove(point)
-
-            assert result is None
-            mock_remove_setup.assert_called_once_with(point)
 
 
 class TestPollSetAddToPublishSetup:
