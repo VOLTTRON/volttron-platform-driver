@@ -6,6 +6,7 @@ from collections import defaultdict
 from weakref import WeakValueDictionary
 from volttron.driver.base.driver import DriverAgent
 from platform_driver.equipment import EquipmentTree, PointNode
+from volttron.utils import get_aware_utc_now
 
 from platform_driver.poll_scheduler import (PollSet, PollScheduler, StaticCyclicPollScheduler,
                                             SerialPollScheduler, GroupConfig, EquipmentTree)
@@ -1046,29 +1047,6 @@ class TestPollSchedulerSchedulePolling:
             expected_initial_start, scheduler._operate_polling, hyperperiod, mock_poll_generator,
             'points', 'publish_setup', scheduler.data_model.remotes['remote1'])
 
-    # @patch('platform_driver.poll_scheduler.StaticCyclicPollScheduler._find_slots')
-    # def test_prepare_to_schedule_calls_find_slots(self, mock_find_slots, scheduler):
-    #     """
-    #     Test that _prepare_to_schedule calls _find_slots correctly.
-    #     """
-    #     mock_find_slots.return_value = {
-    #         timedelta(seconds=3600): {
-    #             timedelta(seconds=1800): {
-    #                 'points': {'point1': MagicMock()},
-    #                 'publish_setup': 'publish_setup_data',
-    #                 'remote': scheduler.data_model.remotes['remote1']
-    #             }
-    #         }
-    #     }
-    #
-    #     # Execute the method under test
-    #     scheduler._prepare_to_schedule()
-    #
-    #     # Assertions
-    #     mock_find_slots.assert_called_once()
-    #     assert len(scheduler.poll_sets) == 1
-    #     assert scheduler.poll_sets[0] == mock_find_slots.return_value
-
 
 class TestFindSlots:
 
@@ -1439,6 +1417,67 @@ class TestStaticCyclicPollSchedulerPrepareToSchedule:
         # ensure _find_slots is called twice, once per remote
         assert scheduler._find_slots.call_count == 2
         assert len(scheduler.slot_plans) == 2
+
+
+class TestStaticCyclicPollSchedulerSchedulePolling:
+
+    @pytest.fixture
+    def scheduler(self):
+        """Fixture to create a StaticCyclicPollScheduler instance with mocked dependencies."""
+        data_model_mock = MagicMock()
+        data_model_mock.agent.core.schedule = MagicMock()
+        group_config_mock = MagicMock()
+        group_config_mock.start_offset = timedelta(seconds=0)
+
+        scheduler = StaticCyclicPollScheduler(data_model=data_model_mock,
+                                              group='test_group',
+                                              group_config=group_config_mock)
+
+        # Mock slot_plans
+        scheduler.slot_plans = [{
+            timedelta(minutes=5): {    # Hyperperiod
+                timedelta(seconds=0): 'plan'    # Placeholder for the plan
+            }
+        }]
+
+        return scheduler
+
+    def test_schedule_polling_calls_correct_methods(self, scheduler):
+        """Test that _schedule_polling calls the correct methods with expected arguments."""
+        # Use get_aware_utc_now to get a timezone-aware datetime
+        aware_datetime = get_aware_utc_now()
+
+        with patch.object(scheduler, 'find_starting_datetime', return_value=aware_datetime) as mock_find_starting_datetime, \
+             patch.object(scheduler, 'get_poll_generator') as mock_get_poll_generator, \
+             patch('volttron.utils.get_aware_utc_now', return_value=aware_datetime):
+
+            # Mock get_poll_generator to return an iterator
+            poll_generator_mock = MagicMock()
+            poll_generator_mock.__next__.return_value = (aware_datetime, 'poll_set')
+            mock_get_poll_generator.return_value = poll_generator_mock
+
+            # Call the method under test
+            scheduler._schedule_polling()
+
+            # Assert that find_starting_datetime was called correctly
+            mock_find_starting_datetime.assert_called()
+            hyperperiod = timedelta(minutes=5)
+            start_offset = scheduler.group_config.start_offset
+
+            # Assert that get_poll_generator was called with the correct arguments
+            mock_get_poll_generator.assert_called_with(
+                aware_datetime,    # initial_start
+                hyperperiod,
+                {timedelta(seconds=0): 'plan'}    # plan
+            )
+
+            # Assert that data_model.agent.core.schedule was called with the correct arguments
+            scheduler.data_model.agent.core.schedule.assert_called_with(
+                aware_datetime,    # start time
+                scheduler._operate_polling,
+                hyperperiod,
+                poll_generator_mock,
+                'poll_set')
 
 
 class TestPollSetInit:
