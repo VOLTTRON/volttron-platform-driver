@@ -192,6 +192,8 @@ class PollScheduler:
         reschedule_required = (group not in cls.poll_sets
                                or remote not in cls.poll_sets[group]
                                or interval not in cls.poll_sets[group][remote])
+        if remote not in cls.poll_sets[group].keys():
+            cls.poll_sets[group][remote] = defaultdict(PollSet)
         cls.poll_sets[group][remote][interval].add(point)
         return reschedule_required
 
