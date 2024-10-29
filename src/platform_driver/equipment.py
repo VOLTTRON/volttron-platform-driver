@@ -376,7 +376,7 @@ class EquipmentTree(TopicTree):
         return (p for p in self.resolve_query(topic_pattern, regex, exact_matches, return_leaves=True) if p.is_point)
 
     def raise_on_locks(self, node: EquipmentNode, requester: str):
-        reserved_by = self.agent.reservation_manager.reserved_by(node.identifier, requester)
+        reserved_by = self.agent.reservation_manager.reserved_by(node.identifier)
         if reserved_by and reserved_by != requester:
             raise ReservationLockError(f"Equipment {node.identifier} is reserved by another party."
                                        f" ({requester}) does not have permission to write at this time.")
