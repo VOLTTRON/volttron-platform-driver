@@ -873,7 +873,6 @@ class PlatformDriverAgent(Agent):
         .. warning:: This method does not require that all points be returned
                      successfully. Check that the error dictionary is empty.
         """
-        print(f"path received: {path}, point_names: {point_names}")
 
         if path is None:
             raise ValueError("Path cannot be None in get_multiple_points RPC call.")
