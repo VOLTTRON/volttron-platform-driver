@@ -874,8 +874,6 @@ class PlatformDriverAgent(Agent):
                      successfully. Check that the error dictionary is empty.
         """
 
-        if path is None:
-            raise ValueError("Path cannot be None in get_multiple_points RPC call.")
         # Support for actuator-style keyword arguments.
         topics = path if path else kwargs.get('topics', None)
         if topics is None:
