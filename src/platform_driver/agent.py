@@ -873,6 +873,7 @@ class PlatformDriverAgent(Agent):
         .. warning:: This method does not require that all points be returned
                      successfully. Check that the error dictionary is empty.
         """
+
         # Support for actuator-style keyword arguments.
         topics = path if path else kwargs.get('topics', None)
         if topics is None:
