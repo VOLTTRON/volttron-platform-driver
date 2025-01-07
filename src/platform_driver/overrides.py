@@ -70,49 +70,69 @@ class OverrideManager:
                failsafe_revert=True,
                staggered_revert=False,
                from_config_store=False):
-        """Turn on override condition on all devices matching the pattern. It schedules an event to keep track of
-        the duration over which override has to be applied. New override patterns and corresponding end times are
-        stored in config store.
-        :param pattern: Override pattern to be applied. For example,
-        :type pattern: str
-        :param duration: Time duration for the override in seconds. If duration <= 0.0, it implies as indefinite
-        duration.
-        :type duration: float
-        :param failsafe_revert: Flag to indicate if revert is required
-        :type failsafe_revert: boolean
-        :param staggered_revert: Flag to indicate if staggering of reverts is needed.
-        :type staggered_revert: boolean
-        :param from_config_store: Flag to indicate if this function is called from config store callback
-        :type from_config_store: boolean
         """
-        stagger_interval = 0.05    # sec
-        # Add to override patterns set
+        Turn on override condition on all devices matching the pattern. It schedules
+        an event to keep track of the duration over which override has to be applied.
+
+        :param pattern: Override pattern (wildcard) to be applied, e.g. "devices/some_device/*".
+        :param duration: Time duration for the override in seconds. If <= 0.0, it's indefinite.
+        :param failsafe_revert: If True, revert points to their default state.
+        :param staggered_revert: If True, revert calls are staggered over time.
+        :param from_config_store: If True, indicates this method was called from a config store callback.
+        """
+        _log.debug(f"Setting override on pattern='{pattern}', duration={duration}, "
+                   f"failsafe_revert={failsafe_revert}, staggered_revert={staggered_revert}")
+
+        stagger_interval = 0.05  # seconds between staggered reverts
+
+        # Add this pattern to our set of known override patterns
         self.patterns.add(pattern)
+
         i = 0
-        for name in self.agent.equipment_tree.devices():
+        # Loop over each device from the equipment tree
+        # 'devices()' might return strings or DeviceNodes
+        for device_obj in self.agent.equipment_tree.devices():
             i += 1
-            if fnmatch.fnmatch(name, pattern):
-                # If revert to default state is needed
+
+            # Convert DeviceNode -> string, if needed
+            if hasattr(device_obj, "identifier"):
+                device_name = device_obj.identifier  # e.g. "devices/singletestfake"
+            else:
+                device_name = device_obj  # it might already be a string
+
+            # Match the device_name against the override pattern
+            if fnmatch.fnmatch(device_name, pattern):
+                _log.debug(f"Override matched device='{device_name}' with pattern='{pattern}'")
+
+                # If failsafe_revert is requested, revert the device
                 if failsafe_revert:
                     if staggered_revert:
-                        self.agent.core.spawn_later(i * stagger_interval, self.agent.revert(name))
+                        # Stagger this revert call
+                        self.agent.core.spawn_later(
+                            i * stagger_interval, self.agent.revert, device_name
+                        )
                     else:
-                        self.agent.core.spawn(self.agent.revert(name))
-                # Set override
-                self.devices.add(name)
-        # Set timer for interval of override condition
+                        # Immediately revert
+                        self.agent.core.spawn(self.agent.revert, device_name)
+
+                # Mark this device as overridden
+                self.devices.add(device_name)
+
+        # Set a timer for the override duration (if > 0)
         config_update = self._update_override_interval(duration, pattern)
+
+        # If we changed the override intervals and it wasn't a config store callback,
+        # then update our stored override patterns in config store
         if config_update and not from_config_store:
-            # Update config store
-            patterns = dict()
+            patterns_dict = {}
             for pat in self.patterns:
-                if self.interval_events[pat] is None:
-                    patterns[pat] = str(0.0)
+                if self.interval_events.get(pat) is None:
+                    patterns_dict[pat] = "0.0"
                 else:
                     evt, end_time = self.interval_events[pat]
-                    patterns[pat] = format_timestamp(end_time)
+                    patterns_dict[pat] = format_timestamp(end_time)
 
-            self.agent.vip.config.set("_override_patterns", dumps(patterns))
+            self.agent.vip.config.set("_override_patterns", dumps(patterns_dict))
 
     def set_off(self, pattern):
         """Turn off override condition on all devices matching the pattern. It removes the pattern from the override
