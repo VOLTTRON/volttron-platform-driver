@@ -98,37 +98,79 @@ def test_set_point(driver_setup):
     new_val = ba.vip.rpc.call("platform.driver", "get_point", f"devices/{device_name}", "TestPoint1").get(timeout=10)
     assert new_val == 33.3, "TestPoint1 should be updated to 33.3"
 
+def test_multiple_points(driver_setup):
+    vi, ba, device_name = driver_setup
 
-# def test_multiple_points(driver_setup):
-#     vi, ba, device_name = driver_setup
-#
-#     # Retrieve multiple points
-#     result, errors = ba.vip.rpc.call(
-#         "platform.driver",
-#         "get_multiple_points",
-#         path=f"devices/{device_name}",
-#         point_names=["TestPoint1", "TestPoint2"]
-#     ).get(timeout=10)
-#
-#     assert not errors, f"Errors found: {errors}"
-#     assert result[f"devices/{device_name}/TestPoint1"] == 10.0
-#     assert result[f"devices/{device_name}/TestPoint2"] == 20.0
+    # Retrieve multiple points
+    result, errors = ba.vip.rpc.call(
+        "platform.driver",
+        "get_multiple_points",
+        path=f"devices/{device_name}",
+        point_names=["TestPoint1", "TestPoint2"]
+    ).get(timeout=10)
 
+    assert not errors, f"Errors found: {errors}"
+    assert result[f"devices/{device_name}/TestPoint1"] == 33.3
+    assert result[f"devices/{device_name}/TestPoint2"] == 20.0
 
 
-# def test_revert_point(driver_setup):
-#     vi, ba, device_name = driver_setup
-#     ba.vip.rpc.call("platform.driver", "revert_point", f"devices/{device_name}", "TestPoint1").get(timeout=10)
-#     val = ba.vip.rpc.call("platform.driver", "get_point", f"devices/{device_name}", "TestPoint1").get(timeout=10)
-#     assert val == 10.0, "After revert, TestPoint1 should be back to 10.0"
-#
-#
-# def test_revert_device(driver_setup):
-#     vi, ba, device_name = driver_setup
-#     ba.vip.rpc.call("platform.driver", "set_point", f"devices/{device_name}", "TestPoint2", 999.9).get(timeout=10)
-#     val = ba.vip.rpc.call("platform.driver", "get_point", f"devices/{device_name}", "TestPoint2").get(timeout=10)
-#     assert val == 999.9
-#
-#     ba.vip.rpc.call("platform.driver", "revert_device", f"devices/{device_name}").get(timeout=10)
-#     val = ba.vip.rpc.call("platform.driver", "get_point", f"devices/{device_name}", "TestPoint2").get(timeout=10)
-#     assert val == 20.0, "After revert_device, TestPoint2 should return to its default value."
+def test_revert_point(driver_setup):
+    vi, ba, device_name = driver_setup
+
+    # Set TestPoint1 to 50.0
+    ba.vip.rpc.call(
+        "platform.driver", "set_point",
+        f"devices/{device_name}",  # "devices/singletestfake"
+        "TestPoint1", 50.0
+    ).get(timeout=10)
+
+    # Revert the point using short path for the device
+    ba.vip.rpc.call(
+        "platform.driver", "revert_point",
+        device_name,      # "singletestfake"
+        "TestPoint1"
+    ).get(timeout=10)
+
+    # Now read it back
+    val = ba.vip.rpc.call(
+        "platform.driver", "get_point",
+        f"devices/{device_name}",  # "devices/singletestfake"
+        "TestPoint1"
+    ).get(timeout=10)
+
+    # Should be back to 10.0
+    assert val == 10.0
+
+
+
+def test_revert_device(driver_setup):
+    vi, ba, device_name = driver_setup
+    ba.vip.rpc.call("platform.driver", "set_point", f"devices/{device_name}", "TestPoint2", 999.9).get(timeout=10)
+    val = ba.vip.rpc.call("platform.driver", "get_point", f"devices/{device_name}", "TestPoint2").get(timeout=10)
+    assert val == 999.9
+
+    ba.vip.rpc.call("platform.driver", "revert_device", f"devices/{device_name}").get(timeout=10)
+    val = ba.vip.rpc.call("platform.driver", "get_point", f"devices/{device_name}", "TestPoint2").get(timeout=10)
+    assert val == 20.0, "After revert_device, TestPoint2 should return to its default value."
+
+
+def test_override_on_off(driver_setup):
+    vi, ba, device_name = driver_setup
+
+    # Enable override
+    ba.vip.rpc.call("platform.driver", "set_override_on", f"devices/{device_name}/*", duration=10.0).get(timeout=10)
+    overridden_devices = ba.vip.rpc.call("platform.driver", "get_override_devices").get(timeout=10)
+    assert f"devices/{device_name}" in overridden_devices, "Device should be in override mode."
+
+    # Disable override
+    ba.vip.rpc.call("platform.driver", "set_override_off", f"devices/{device_name}/*").get(timeout=10)
+    overridden_devices = ba.vip.rpc.call("platform.driver", "get_override_devices").get(timeout=10)
+    assert f"devices/{device_name}" not in overridden_devices, "Device should not be in override mode."
+
+
+def test_poll_schedule(driver_setup):
+    vi, ba, _ = driver_setup
+
+    schedule = ba.vip.rpc.call("platform.driver", "get_poll_schedule").get(timeout=10)
+    assert schedule, "Poll schedule should not be empty."
+    assert "default" in schedule, "Default polling group should exist."
