@@ -27,7 +27,13 @@ def driver_setup(volttron_instance):
         "allow_duplicate_remotes": False,
         "max_open_sockets": 5,
         "max_concurrent_publishes": 5,
-        "scalability_test": False
+        "scalability_test": False,
+        "groups": {
+            "default": {
+                "frequency": 5.0,  # Polling frequency in seconds
+                "points": ["*"]     # Poll all points
+            }
+        }
     }
     main_config_path = Path(tempfile.mktemp(suffix="_main_driver_config.json"))
     with main_config_path.open("w") as file:
@@ -43,7 +49,8 @@ def driver_setup(volttron_instance):
         "interval": 5,
         "timezone": "US/Pacific",
         "heart_beat_point": "Heartbeat",
-        "driver_type": "fake"
+        "driver_type": "fake",
+        "active": True
     }
     device_config_path = Path(tempfile.mktemp(suffix="_driver_config.json"))
     with device_config_path.open("w") as file:
@@ -127,7 +134,7 @@ def test_revert_point(driver_setup):
     # Revert the point using short path for the device
     ba.vip.rpc.call(
         "platform.driver", "revert_point",
-        device_name,      # "singletestfake"
+        f"devices/{device_name}",  # "devices/singletestfake"
         "TestPoint1"
     ).get(timeout=10)
 
@@ -158,14 +165,15 @@ def test_override_on_off(driver_setup):
     vi, ba, device_name = driver_setup
 
     # Enable override
-    ba.vip.rpc.call("platform.driver", "set_override_on", f"devices/{device_name}/*", duration=10.0).get(timeout=10)
+    ba.vip.rpc.call("platform.driver", "set_override_on", f"devices/{device_name}").get(timeout=10)
     overridden_devices = ba.vip.rpc.call("platform.driver", "get_override_devices").get(timeout=10)
     assert f"devices/{device_name}" in overridden_devices, "Device should be in override mode."
 
     # Disable override
-    ba.vip.rpc.call("platform.driver", "set_override_off", f"devices/{device_name}/*").get(timeout=10)
+    ba.vip.rpc.call("platform.driver", "set_override_off", f"devices/{device_name}").get(timeout=10)
     overridden_devices = ba.vip.rpc.call("platform.driver", "get_override_devices").get(timeout=10)
     assert f"devices/{device_name}" not in overridden_devices, "Device should not be in override mode."
+
 
 
 def test_poll_schedule(driver_setup):
