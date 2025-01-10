@@ -168,9 +168,11 @@ class PollScheduler:
                         poll_sets[group][interval] = PollSet(data_model, remote)
                     poll_sets[group][interval].add(point)
                     groups.add(group)
-            for group in groups:
-                # Remote level is assigned separately because we don't have the option for a default-WeakKeyDictionary.
-                cls.poll_sets[group][remote] = poll_sets[group]
+            for group in poll_sets:
+                if remote not in cls.poll_sets[group]:
+                    cls.poll_sets[group][remote] = defaultdict(lambda: PollSet(data_model, remote))
+                for interval in poll_sets[group]:
+                    cls.poll_sets[group][remote][interval] = poll_sets[group][interval]
 
     @staticmethod
     def find_starting_datetime(now: datetime, interval: timedelta, group_delay: timedelta = None):
@@ -193,7 +195,7 @@ class PollScheduler:
                                or remote not in cls.poll_sets[group]
                                or interval not in cls.poll_sets[group][remote])
         if remote not in cls.poll_sets[group].keys():
-            cls.poll_sets[group][remote] = defaultdict(PollSet)
+            cls.poll_sets[group][remote] = defaultdict(lambda: PollSet(data_model, remote))
         cls.poll_sets[group][remote][interval].add(point)
         return reschedule_required
 
