@@ -182,3 +182,71 @@ def test_poll_schedule(driver_setup):
     schedule = ba.vip.rpc.call("platform.driver", "get_poll_schedule").get(timeout=10)
     assert schedule, "Poll schedule should not be empty."
     assert "default" in schedule, "Default polling group should exist."
+
+def test_scrape_all(driver_setup):
+    vi, ba, device_name = driver_setup
+    result = ba.vip.rpc.call("platform.driver", "scrape_all", f"devices/{device_name}").get(timeout=10)
+    expected_result = [{'devices/singletestfake/Heartbeat': True, 'devices/singletestfake/TestPoint1': 10.0,
+                        'devices/singletestfake/TestPoint2': 20.0}, {}]
+    assert result == expected_result
+
+def test_set_multiple_points(driver_setup):
+    vi, ba, device_name = driver_setup
+
+    # Prepare point-name-value tuples
+    points_values = [
+        ("TestPoint1", 45.0),
+        ("TestPoint2", 55.0)
+    ]
+
+    errors = ba.vip.rpc.call(
+        "platform.driver",
+        "set_multiple_points",
+        f"devices/{device_name}",
+        points_values
+    ).get(timeout=10)
+
+    assert not errors, f"Failed to set multiple points: {errors}"
+
+    # Now read them back
+    val1 = ba.vip.rpc.call("platform.driver", "get_point", f"devices/{device_name}", "TestPoint1").get(timeout=10)
+    val2 = ba.vip.rpc.call("platform.driver", "get_point", f"devices/{device_name}", "TestPoint2").get(timeout=10)
+    assert val1 == 45.0, "TestPoint1 should be set to 45.0"
+    assert val2 == 55.0, "TestPoint2 should be set to 55.0"
+
+
+def test_start_stop_points(driver_setup):
+    #TODO make sure it does not do a new reading? check for an error?
+    vi, ba, device_name = driver_setup
+
+    # Stop all points on device
+    ba.vip.rpc.call("platform.driver", "stop", f"devices/{device_name}").get(timeout=10)
+
+    # Attempt to get_point might still succeed or raise an error,
+    # depending on how your code handles stopped points,
+    # but they won't be polled in the background.
+
+    # Start them again
+    ba.vip.rpc.call("platform.driver", "start", f"devices/{device_name}").get(timeout=10)
+
+    # Confirm we can read them after they've started again
+    val = ba.vip.rpc.call("platform.driver", "get_point", f"devices/{device_name}", "TestPoint2").get(timeout=10)
+    assert val is not None, "Should be able to read TestPoint2 after start() was called."
+
+# def test_enable_disable_device(driver_setup):
+#     #TODO disable it then read the configuration.
+#     vi, ba, device_name = driver_setup
+#
+#     # Disable the device
+#     ba.vip.rpc.call("platform.driver", "disable", f"devices/{device_name}").get(timeout=10)
+#
+#
+#     result = ba.vip.rpc.call("platform.driver", "get_point", f"devices/{device_name}", "TestPoint1").get(timeout=10)
+#     assert result == "something"
+#
+#     # Re-enable the device
+#     ba.vip.rpc.call("platform.driver", "enable", f"devices/{device_name}").get(timeout=10)
+#
+#     # Should work again
+#     val = ba.vip.rpc.call("platform.driver", "get_point", f"devices/{device_name}", "TestPoint1").get(timeout=10)
+#     assert val is not None, "After enabling the device, we should be able to read points."
