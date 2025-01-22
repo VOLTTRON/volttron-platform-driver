@@ -123,3 +123,10 @@ def test_instantiate():
     assert result == 10
     result = pda.set_point('devices/campus/building/fake', 'SampleWritableFloat1', 15)
     assert result == 15
+
+
+    result = pda.get_multiple_points(['devices/campus/building/fake/SampleWritableFloat1',
+                                      'devices/campus/building/fake/OutsideAirTemperature1'])
+    assert result == ({'devices/campus/building/fake/OutsideAirTemperature1': 50.0,
+                       'devices/campus/building/fake/SampleWritableFloat1': 15.0}, {})
+
