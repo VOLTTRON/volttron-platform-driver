@@ -258,6 +258,7 @@ def test_device_tree_to_json_mock():
 
 
 def test_last_and_semantic_last(driver_agent_fixture):
+    """ """
     pda = driver_agent_fixture
 
     pda.set_point("devices/campus/building/fake", "SampleWritableFloat1", 123)
