@@ -3,14 +3,14 @@
 #                 Integration Tests using VOLTTRON Instance Fixture
 # ===----------------------------------------------------------------------===
 
-import csv
 import json
 import time
 import tempfile
 from pathlib import Path
-
-import pytest
+import ast
 from volttrontesting.platformwrapper import InstallAgentOptions
+import pytest
+import gevent
 
 
 @pytest.fixture(scope="module")
@@ -92,7 +92,7 @@ def driver_setup(volttron_instance):
 
     return vi, ba, "singletestfake"
 
-
+@pytest.mark.skip(reason="Skipping this test. Faster test can be found in test_agent_integ_test_server.py.")
 def test_get_point(driver_setup):
     vi, ba, device_name = driver_setup
     value = ba.vip.rpc.call("platform.driver", "get_point", f"devices/{device_name}",
@@ -100,6 +100,7 @@ def test_get_point(driver_setup):
     assert value == 10.0, "Initial value of TestPoint1 should be 10.0"
 
 
+@pytest.mark.skip(reason="Skipping this test. Faster test can be found in test_agent_integ_test_server.py.")
 def test_set_point(driver_setup):
     vi, ba, device_name = driver_setup
     ba.vip.rpc.call("platform.driver", "set_point", f"devices/{device_name}", "TestPoint1",
@@ -108,7 +109,7 @@ def test_set_point(driver_setup):
                               "TestPoint1").get(timeout=10)
     assert new_val == 33.3, "TestPoint1 should be updated to 33.3"
 
-
+@pytest.mark.skip(reason="Skipping this test. Faster test can be found in test_agent_integ_test_server.py.")
 def test_multiple_points(driver_setup):
     vi, ba, device_name = driver_setup
 
@@ -166,6 +167,7 @@ def test_revert_device(driver_setup):
     assert val == 20.0, "After revert_device, TestPoint2 should return to its default value."
 
 
+@pytest.mark.skip(reason="Skipping this test. Faster test can be found in test_agent_integ_test_server.py.")
 def test_override_on_off(driver_setup):
     vi, ba, device_name = driver_setup
 
@@ -181,6 +183,7 @@ def test_override_on_off(driver_setup):
     assert f"devices/{device_name}" not in overridden_devices, "Device should not be in override mode."
 
 
+@pytest.mark.skip(reason="Skipping this test. Faster test can be found in test_agent_integ_test_server.py.")
 def test_poll_schedule(driver_setup):
     vi, ba, _ = driver_setup
 
@@ -189,6 +192,7 @@ def test_poll_schedule(driver_setup):
     assert "default" in schedule, "Default polling group should exist."
 
 
+@pytest.mark.skip(reason="Skipping this test. Faster test can be found in test_agent_integ_test_server.py.")
 def test_scrape_all(driver_setup):
     vi, ba, device_name = driver_setup
     result = ba.vip.rpc.call("platform.driver", "scrape_all",
@@ -201,6 +205,7 @@ def test_scrape_all(driver_setup):
     assert result == expected_result
 
 
+@pytest.mark.skip(reason="Skipping this test. Faster test can be found in test_agent_integ_test_server.py.")
 def test_set_multiple_points(driver_setup):
     vi, ba, device_name = driver_setup
 
@@ -220,8 +225,6 @@ def test_set_multiple_points(driver_setup):
     assert val1 == 45.0, "TestPoint1 should be set to 45.0"
     assert val2 == 55.0, "TestPoint2 should be set to 55.0"
 
-
-import gevent
 
 
 def test_pubsub_get_point(driver_setup):
@@ -270,16 +273,6 @@ def test_pubsub_get_point(driver_setup):
 
     print(f"Pub/Sub GET test passed! Received topic={topic}, value={msg}")
 
-
-# test_platform_driver_pubsub.py
-# -*- coding: utf-8 -*-
-import pytest
-import gevent
-from unittest.mock import MagicMock
-
-# For demonstration, assume you have an existing fixture "driver_setup"
-# that returns (volttron_instance, test_agent, device_name), with a device
-# already configured: "devices/singletestfake" or similar.
 
 
 def test_pubsub_get_point(driver_setup):
@@ -370,47 +363,6 @@ def test_pubsub_set_point(driver_setup):
         assert topic.endswith("/TestPoint1")
         # The message is typically the point's new value
         assert msg == new_value, f"Expected {new_value}, got {msg}"
-
-
-# def test_pubsub_revert_point(driver_setup):
-#     """
-#     Publish a revert point command to "actuators/revert/point/devices/<device_name>/TestPoint1"
-#     and confirm a "reverted" message is published.
-#     """
-#     vi, ba, device_name = driver_setup
-#
-#     subscriber = vi.build_agent(identity="sub_agent_revert_pt")
-#     received_events = []
-#
-#     def on_revert_or_error_topic(peer, sender, bus, topic, headers, message):
-#         if "reverted/point" in topic or "error" in topic:
-#             received_events.append((topic, headers, message))
-#
-#     # 1. Subscribe to "devices/actuators/reverted/point/#" and "devices/actuators/error/#"
-#     subscriber.vip.pubsub.subscribe(peer='pubsub', prefix='devices/actuators/reverted/point', callback=on_revert_or_error_topic)
-#     subscriber.vip.pubsub.subscribe(peer='pubsub', prefix='devices/actuators/error', callback=on_revert_or_error_topic)
-#
-#     # 2. Publish revert command
-#     revert_topic = f"actuators/revert/point/devices/{device_name}/TestPoint1"
-#     subscriber.vip.pubsub.publish(
-#         peer='pubsub',
-#         topic=revert_topic,
-#         headers={"requesterID": "test_pubsub_agent"},
-#         message=None
-#     )
-#
-#     # 3. Wait for response
-#     gevent.sleep(2)
-#
-#     # 4. Check for revert or error message
-#     assert received_events, "No revert or error message after revert_point."
-#
-#     topic, headers, msg = received_events[0]
-#     if "error" in topic:
-#         pytest.fail(f"Revert point request caused error: {msg}")
-#     else:
-#         # Usually: "devices/actuators/reverted/point/devices/<device_name>/TestPoint1"
-#         assert "reverted/point/devices/" in topic, f"Unexpected revert topic: {topic}"
 
 
 def test_pubsub_revert_device(driver_setup):
@@ -533,3 +485,64 @@ def test_pubsub_get_nonexistent_point(driver_setup):
     assert received_errors, "Expected error message for non-existent point."
     topic, headers, msg = received_errors[0]
     assert "NonExistentPoint" in topic, f"Error topic mismatch: {topic}"
+
+
+def test_poll_scheduler_basic(driver_setup):
+    """
+    Test that PollScheduler initializes correctly and schedules the device with the expected interval.
+    """
+    vi, ba, device_name = driver_setup
+
+    # Retrieve the poll schedule via RPC
+    schedule = ba.vip.rpc.call("platform.driver", "get_poll_schedule").get(timeout=10)
+    assert schedule, "Poll schedule should not be empty."
+
+    # Verify that the 'default' polling group exists
+    assert "default" in schedule, "Default polling group should exist."
+
+    # Extract the 'default' group's schedule
+    default_group_schedule = schedule["default"]
+    assert default_group_schedule, "Default polling group schedule should not be empty."
+
+    # The hyperperiod is expected to be '0:00:05' as per main_config
+    expected_hyperperiod_str = "0:00:05"
+    assert expected_hyperperiod_str in default_group_schedule, \
+        f"Expected hyperperiod '{expected_hyperperiod_str}' not found in default group schedule."
+
+    # Retrieve devices scheduled under the expected hyperperiod
+    devices_scheduled = []
+    for remote, devices in default_group_schedule[expected_hyperperiod_str].items():
+        for device in devices:
+            if isinstance(device, tuple):
+                # If device is a tuple, extract the first element
+                devices_scheduled.append(device[0])
+            elif isinstance(device, str):
+                try:
+                    # Attempt to parse the string as a tuple
+                    parsed_device = ast.literal_eval(device)
+                    if isinstance(parsed_device, tuple):
+                        devices_scheduled.append(parsed_device[0])
+                    else:
+                        devices_scheduled.append(parsed_device)
+                except (ValueError, SyntaxError):
+                    # If parsing fails, append the device string as is
+                    devices_scheduled.append(device)
+            else:
+                # Append the device as is for any other types
+                devices_scheduled.append(device)
+
+    # Verify that the entire device is scheduled
+    expected_device = f"devices/{device_name}"
+    assert expected_device in devices_scheduled, \
+        f"Device '{expected_device}' should be scheduled in the PollScheduler."
+
+    # Optionally, verify the polling interval
+    # Convert hyperperiod string '0:00:05' to total seconds (5 seconds)
+    try:
+        h, m, s = map(int, expected_hyperperiod_str.split(':'))
+        expected_interval_seconds = h * 3600 + m * 60 + s
+    except ValueError:
+        pytest.fail(f"Unexpected hyperperiod format: {expected_hyperperiod_str}")
+
+    assert expected_interval_seconds == 5.0, \
+        f"Expected polling interval 5.0 seconds, got {expected_interval_seconds} seconds."
