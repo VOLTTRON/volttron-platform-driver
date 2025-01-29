@@ -171,6 +171,8 @@ def test_override_on_off(driver_agent_fixture):
     pda.set_override_off("devices/campus/building/fake")
     assert "devices/campus/building/fake" not in pda.get_override_devices()
 
+# TODO Create test for clear override / get override patterns /
+
 
 def test_poll_schedule(driver_agent_fixture):
     """Check get_poll_schedule is not empty, has 'default' group."""
@@ -225,18 +227,14 @@ def test_semantic_get_set(driver_agent_fixture):
 
 
 def test_start_stop(driver_agent_fixture):
+    # TODO actually figure out how to test if its polled
+    # TODO make the semantic version
     """Test stopping and starting a point from being polled (minimal)."""
     pda = driver_agent_fixture
     pda.stop('devices/campus/building/fake/SampleWritableFloat1')
     # Possibly check internal flags or logs
     pda.start('devices/campus/building/fake/SampleWritableFloat1')
     # No exception => success
-
-
-@pytest.mark.skip("Revert logic not implemented.")
-def test_semantic_revert(driver_agent_fixture):
-    """If revert doesn't fully work, skip or remove this test."""
-    pass
 
 
 def test_list_topics(driver_agent_fixture):
@@ -273,3 +271,12 @@ def test_last_and_semantic_last(driver_agent_fixture):
     assert "updated" in last_data
 
     assert last_data["value"] == 10.0
+
+# TODO create test for enable / disable / semantic
+# TODO create test for status
+# TODO create test for add node
+# TODO create test for heart_beat
+# TODO create test for request_new_schedule / cancel_schedule
+# TODO create test for handle_get / set /
+# TODO create test for revert device
+# TODO create test for reservation request
