@@ -25,6 +25,8 @@ def driver_agent_fixture():
         "driver_type":
         "fake",
         "driver_config": {},
+        "active": True,
+        "registry_name": "test_registry",
         "registry_config": [{
             "Point Name": "EKG",
             "Volttron Point Name": "EKG",
@@ -272,11 +274,167 @@ def test_last_and_semantic_last(driver_agent_fixture):
 
     assert last_data["value"] == 10.0
 
+
+def test_add_node_device(driver_agent_fixture):
+    """
+    Test that adding a new device node via the add_node RPC adds
+    a new device to the PlatformDriverAgent's equipment_tree.
+    """
+    pda = driver_agent_fixture
+
+    new_device_config = {
+        "driver_type": "fake",
+        "driver_config": {},
+        "active": True,
+        "registry_name": "test_registry_for_add_node",
+        "registry_config": [
+            {
+                "Point Name": "SomeWritablePoint",
+                "Volttron Point Name": "SomeWritablePoint",
+                "Units": "unitless",
+                "Writable": True,
+                "Starting Value": "10",
+                "Type": "float",
+                "Notes": "Example point"
+            }
+        ],
+        "interval": 5,
+        "timezone": "US/Pacific",
+        "heart_beat_point": "Heartbeat",
+        "publish_breadth_first_all": False,
+        "publish_depth_first": False,
+        "publish_breadth_first": False
+    }
+
+    node_topic = "devices/campus/building/new_test_device"
+
+    # Call the RPC to add a new device node
+    result = pda.add_node(node_topic=node_topic,
+                          config=new_device_config,
+                          update_schedule=True)
+
+    # 1. Verify add_node returned True
+    assert result is True, "add_node should return True for a successful add."
+
+    # 2. Check that the new device node is registered in the equipment_tree
+    node = pda.equipment_tree.get_node(node_topic)
+    assert node is not None, "Equipment tree should now contain the newly added device."
+
+    # 3. Confirm the node is active (if that is part of your logic):
+    assert node.config.active is True, "Newly added device should be active per config."
+
+
+def test_request_new_schedule(driver_agent_fixture):
+    """
+    Test that calling the request_new_schedule RPC method results in
+    a call to reservation_manager.new_task with correctly processed parameters
+    and returns the expected structure.
+    """
+    pda = driver_agent_fixture
+
+    # Mock the reservation_manager's new_task method so we can verify inputs & outputs.
+    mock_return_value = {
+        "success": True,
+        "data": {},
+        "info_string": "Successfully reserved."
+    }
+    pda.reservation_manager.new_task = MagicMock(return_value=mock_return_value)
+
+    # Prepare a schedule request (e.g. single block: [device_path, start_time, end_time]).
+    schedule_requests = [
+        [
+            "devices/campus/building/fake",
+            "2025-12-01T09:00:00",
+            "2025-12-01T10:00:00"
+        ]
+    ]
+
+    # Call request_new_schedule.
+    task_id = "test_task"
+    priority = "HIGH"
+    result = pda.request_new_schedule(None, task_id, priority, schedule_requests)
+
+    # Check reservation_manager.new_task was called with correct arguments.
+    pda.reservation_manager.new_task.assert_called_once()
+    call_args = pda.reservation_manager.new_task.call_args[0]
+
+    # call_args = (sender, task_id, priority, requests, now=None)
+    # Confirm the method received the correct parameters:
+    assert call_args[1] == "test_task"
+    assert call_args[2] == "HIGH"
+    assert call_args[3] == schedule_requests  # might be further transformed inside new_task
+
+    # Check final returned dictionary structure:
+    assert result["success"] is True
+    assert result["data"] == {}
+    assert result["info_string"] == "Successfully reserved."
+
+def test_request_cancel_schedule(driver_agent_fixture):
+    """
+    Test that calling the request_cancel_schedule RPC method invokes
+    reservation_manager.cancel_task with the correct arguments and
+    returns the expected structure.
+    """
+    pda = driver_agent_fixture
+
+    # Mock the reservation_manager's cancel_task return value
+    mock_return_value = {
+        "success": True,
+        "data": {},
+        "info_string": "Task canceled."
+    }
+    pda.reservation_manager.cancel_task = MagicMock(return_value=mock_return_value)
+
+    # The first argument (`_`) is ignored in the agent method signature;
+    # we can just pass None.
+    task_id = "test_task"
+    result = pda.request_cancel_schedule(None, task_id)
+
+    # Verify cancel_task was called exactly once, with the internal "sender" and task_id
+    from unittest.mock import ANY
+    pda.reservation_manager.cancel_task.assert_called_once_with(ANY, task_id)
+
+    # Check the structure/values of the returned dictionary
+    assert result["success"] is True
+    assert result["data"] == {}
+    assert result["info_string"] == "Task canceled."
+
+def test_revert_device(driver_agent_fixture):
+    """
+    Test that the revert_device RPC method calls the agent's revert method
+    and publishes the revert-device response topic as expected.
+    """
+    pda = driver_agent_fixture
+
+    # We'll mock out the internal 'revert' method and
+    # the '_push_result_topic_pair' method so we can verify calls.
+    pda.revert = MagicMock()
+    pda._push_result_topic_pair = MagicMock()
+
+    # This is our test input path
+    device_path = "devices/campus/building/fake"
+
+    # Call the public RPC method
+    pda.revert_device(device_path)
+
+    # 1. Confirm that the agent calls `revert` with the correct "equipment ID".
+    #    The revert_device method calls `self.revert(self._equipment_id(path, None))`.
+    expected_equip_id = pda._equipment_id(device_path, None)
+    pda.revert.assert_called_once_with(expected_equip_id)
+
+    # 2. Confirm a "reverted device" message was published via _push_result_topic_pair.
+    #    By default it publishes to e.g. 'devices/actuators/reverted/device/<path>'.
+    #    The prefix for the device revert is REVERT_DEVICE_RESPONSE_PREFIX
+    #    The last argument is always `None`.
+    from platform_driver.constants import REVERT_DEVICE_RESPONSE_PREFIX
+    pda._push_result_topic_pair.assert_called_once()
+    call_args = pda._push_result_topic_pair.call_args[0]
+
+    # call_args is a tuple: (prefix, path, headers, message)
+    assert call_args[0] == REVERT_DEVICE_RESPONSE_PREFIX
+    assert call_args[1] == device_path
+    # call_args[2] is the headers dictionary (we won't check every detail).
+    # call_args[3] should be None.
+    assert call_args[3] is None
+
 # TODO create test for enable / disable / semantic
-# TODO create test for status
-# TODO create test for add node
-# TODO create test for heart_beat
-# TODO create test for request_new_schedule / cancel_schedule
-# TODO create test for handle_get / set /
-# TODO create test for revert device
-# TODO create test for reservation request
