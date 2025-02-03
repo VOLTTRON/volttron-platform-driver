@@ -10,6 +10,7 @@ from platform_driver.agent import PlatformDriverAgent
 from platform_driver.overrides import OverrideManager
 from platform_driver.reservations import ReservationManager
 from platform_driver.topic_tree import DeviceTree
+from platform_driver.constants import SET_TOPIC, VALUE_RESPONSE_PREFIX
 
 
 @pytest.fixture(scope="module")
@@ -109,9 +110,11 @@ def driver_agent_fixture():
                                  FakeConfig,
                                  schedule_now=True)
 
+
     pda.vip = MagicMock()
     pda.vip.rpc.context = MagicMock()
     pda.vip.rpc.context.vip_message.peer = 'some.caller'
+
 
     yield pda
 
@@ -437,4 +440,224 @@ def test_revert_device(driver_agent_fixture):
     # call_args[3] should be None.
     assert call_args[3] is None
 
-# TODO create test for enable / disable / semantic
+
+# def test_enable_disable_semantic(driver_agent_fixture):
+#     """
+#     Test that enable/disable RPC methods (and their semantic variants)
+#     correctly change a node’s active status.
+#     """
+#     pda = driver_agent_fixture
+#     # (Optional) Patch set_registry_name so that if it is later called, it returns a valid registry name.
+#     pda.equipment_tree.set_registry_name = MagicMock(return_value="test_registry")
+#
+#     # Use the device node created in the fixture.
+#     node_topic = "devices/campus/building/fake"
+#     node = pda.equipment_tree.get_node(node_topic)
+#     assert node is not None, "Device node must exist for testing."
+#
+#     # Set the node's registry_name to bypass the exception in _add_fields_to_device_configuration_for_save.
+#     node.registry_name = "test_registry"
+#
+#     # Disable the node using the standard RPC.
+#     pda.disable(node_topic)
+#     assert node.config.active is False, "Node should be disabled."
+#
+#     # Enable it back.
+#     pda.enable(node_topic)
+#     assert node.config.active is True, "Node should be enabled."
+#
+#     # Now test the semantic variants.
+#     # Patch semantic_query to return our node topic.
+#     pda.semantic_query = MagicMock(return_value=node_topic)
+#     # Disable via semantic RPC.
+#     pda.semantic_disable("dummy query")
+#     assert node.config.active is False, "Node should be disabled via semantic_disable."
+#
+#     # Enable via semantic RPC.
+#     pda.semantic_enable("dummy query")
+#     assert node.config.active is True, "Node should be enabled via semantic_enable."
+
+
+
+def test_remove_node(driver_agent_fixture):
+    """
+    Test that remove_node RPC correctly removes a node from the equipment tree.
+    """
+    pda = driver_agent_fixture
+    # Prepare a new device configuration for a removable node.
+    new_device_config = {
+        "driver_type": "fake",
+        "driver_config": {},
+        "active": True,
+        "registry_name": "test_registry_for_remove_node",
+        "registry_config": [
+            {
+                "Point Name": "RemovablePoint",
+                "Volttron Point Name": "RemovablePoint",
+                "Units": "unitless",
+                "Writable": True,
+                "Starting Value": "20",
+                "Type": "float",
+                "Notes": "A removable point"
+            }
+        ],
+        "interval": 5,
+        "timezone": "US/Pacific",
+        "heart_beat_point": "Heartbeat",
+        "publish_breadth_first_all": False,
+        "publish_depth_first": False,
+        "publish_breadth_first": False
+    }
+    node_topic = "devices/campus/building/new_test_device_to_remove"
+
+    # Add the node
+    added = pda.add_node(node_topic=node_topic,
+                         config=new_device_config,
+                         update_schedule=True)
+    assert added is True, "add_node should return True."
+    node = pda.equipment_tree.get_node(node_topic)
+    assert node is not None, "Equipment tree should contain the new node."
+
+    # Now remove the node
+    removed = pda.remove_node(node_topic, leave_disconnected=False)
+    assert removed is True, "remove_node should return True on successful removal."
+    node_after = pda.equipment_tree.get_node(node_topic)
+    assert node_after is None, "Node should be removed from the equipment tree."
+
+
+def test_status_not_implemented(driver_agent_fixture):
+    """
+    Test that calling status (and semantic_status) raises NotImplementedError.
+    """
+    pda = driver_agent_fixture
+    with pytest.raises(NotImplementedError):
+        pda.status("devices/campus/building/fake")
+    # Patch semantic_query to return a valid topic string
+    pda.semantic_query = MagicMock(return_value="devices/campus/building/fake/SampleWritableFloat1")
+    with pytest.raises(NotImplementedError):
+        pda.semantic_status("dummy query")
+
+
+
+def test_list_interfaces(driver_agent_fixture):
+    """
+    Test list_interfaces RPC. We patch iter_modules to simulate installed interfaces.
+    """
+    pda = driver_agent_fixture
+    # Patch iter_modules so that it returns a fake module with an attribute 'name'
+    fake_module = MagicMock()
+    fake_module.name = "fake_driver"
+    with patch("platform_driver.agent.iter_modules", return_value=[fake_module]) as mock_iter:
+        interfaces_list = pda.list_interfaces()
+        assert isinstance(interfaces_list, list)
+        assert "fake_driver" in interfaces_list
+
+
+def test_remove_interface(driver_agent_fixture):
+    """
+    Test remove_interface RPC by simulating a successful uninstall via subprocess.
+    """
+    pda = driver_agent_fixture
+    # Patch subprocess.run to simulate a zero return code.
+    with patch("subprocess.run", return_value=MagicMock(returncode=0)) as mock_run:
+        result = pda.remove_interface("fake")
+        assert result is True
+
+
+def test_legacy_revert_point(driver_agent_fixture):
+    """
+    Test the legacy revert_point RPC method.
+    """
+    pda = driver_agent_fixture
+    equip_id = pda._equipment_id("devices/campus/building/fake", "SomePoint")
+    dummy_node = MagicMock()
+    dummy_node.identifier = equip_id
+    # Patch get_node to return our dummy node.
+    pda.equipment_tree.get_node = MagicMock(return_value=dummy_node)
+    # Patch get_remote to return a fake remote with a revert_point method.
+    fake_remote = MagicMock()
+    pda.equipment_tree.get_remote = MagicMock(return_value=fake_remote)
+    # Patch raise_on_locks to do nothing.
+    pda.equipment_tree.raise_on_locks = MagicMock()
+    # Patch _push_result_topic_pair so we can verify it is called.
+    pda._push_result_topic_pair = MagicMock()
+
+    # Call revert_point (legacy RPC).
+    pda.revert_point("devices/campus/building/fake", "SomePoint")
+
+    # Verify that the remote’s revert_point method was called with the full topic.
+    fake_remote.revert_point.assert_called_once_with(equip_id)
+    # Verify that the result was published with the correct response prefix.
+    from platform_driver.constants import REVERT_POINT_RESPONSE_PREFIX
+    pda._push_result_topic_pair.assert_called_once()
+    call_args = pda._push_result_topic_pair.call_args[0]
+    assert call_args[0] == REVERT_POINT_RESPONSE_PREFIX
+    assert call_args[1] == equip_id
+    assert call_args[3] is None  # the message is None
+
+
+
+def test_forward_bacnet_cov_value(driver_agent_fixture):
+    """
+    Test that forward_bacnet_cov_value correctly forwards BACnet COV values.
+    """
+    pda = driver_agent_fixture
+    fake_remote = MagicMock()
+    # Simulate a remote identified by "remote_test".
+    pda.equipment_tree.remotes["remote_test"] = fake_remote
+
+    topic = "SomePoint"
+    point_values = {"val": 42}
+    pda.forward_bacnet_cov_value("remote_test", topic, point_values)
+    fake_remote.publish_cov_value.assert_called_once_with(topic, point_values)
+
+
+def test_handle_get(driver_agent_fixture):
+    """
+    Test the pubsub handler for get requests.
+    """
+    pda = driver_agent_fixture
+    # Simulate that get_point returns 123.
+    pda.get_point = MagicMock(return_value=123)
+    pda._push_result_topic_pair = MagicMock()
+    # Import constants.
+    from platform_driver.constants import GET_TOPIC, VALUE_RESPONSE_PREFIX
+    # Construct a topic as published by a client.
+    test_point = "devices/campus/building/fake/SampleWritableFloat1"
+    topic = f"{GET_TOPIC}/{test_point}"
+    # Call the handler.
+    pda.handle_get(None, 'caller', None, topic, None, None)
+    pda.get_point.assert_called_once_with(test_point)
+    pda._push_result_topic_pair.assert_called_once_with(VALUE_RESPONSE_PREFIX, test_point, ANY, 123)
+
+
+def test_handle_set(driver_agent_fixture):
+    """
+    Test the pubsub handler for set requests.
+    """
+    pda = driver_agent_fixture
+    # Simulate _set_point to return a new value.
+    pda._set_point = MagicMock(return_value=999)
+    pda._push_result_topic_pair = MagicMock()
+    test_point = "devices/campus/building/fake/SampleWritableFloat1"
+    topic = f"{SET_TOPIC}/{test_point}"
+    # Call the handler with a value of 999.
+    # Pass 'some.caller' as the sender (to match what _get_headers would use in a real call).
+    pda.handle_set(None, 'some.caller', None, topic, None, 999)
+    # _set_point should have been called with the equipment id and value.
+    expected_equip_id = pda._equipment_id("devices/campus/building/fake", "SampleWritableFloat1")
+    pda._set_point.assert_called_once_with(expected_equip_id, 999, 'some.caller', **{})
+
+
+
+def test_equipment_id_helper(driver_agent_fixture):
+    """
+    Test the helper method _equipment_id to ensure it produces the expected topic.
+    """
+    pda = driver_agent_fixture
+    # Given a path and point, the equipment id should start with the equipment_tree root.
+    result = pda._equipment_id("campus/building/fake", "Point")
+    assert result.startswith(pda.equipment_tree.root), "Equipment id should be prefixed with the root."
+    # If the path already starts with the root, it should not be prefixed twice.
+    result2 = pda._equipment_id("devices/campus/building/fake", "Point")
+    assert result2.startswith("devices/"), "Equipment id should still start with 'devices/'."
