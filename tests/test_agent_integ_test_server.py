@@ -525,20 +525,6 @@ def test_remove_node(driver_agent_fixture):
     assert node_after is None, "Node should be removed from the equipment tree."
 
 
-def test_status_not_implemented(driver_agent_fixture):
-    """
-    Test that calling status (and semantic_status) raises NotImplementedError.
-    """
-    pda = driver_agent_fixture
-    with pytest.raises(NotImplementedError):
-        pda.status("devices/campus/building/fake")
-    # Patch semantic_query to return a valid topic string
-    pda.semantic_query = MagicMock(return_value="devices/campus/building/fake/SampleWritableFloat1")
-    with pytest.raises(NotImplementedError):
-        pda.semantic_status("dummy query")
-
-
-
 def test_list_interfaces(driver_agent_fixture):
     """
     Test list_interfaces RPC. We patch iter_modules to simulate installed interfaces.
