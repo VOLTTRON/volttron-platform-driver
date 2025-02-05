@@ -440,7 +440,7 @@ def test_revert_device(driver_agent_fixture):
     # call_args[3] should be None.
     assert call_args[3] is None
 
-
+# TODO get working
 # def test_enable_disable_semantic(driver_agent_fixture):
 #     """
 #     Test that enable/disable RPC methods (and their semantic variants)
