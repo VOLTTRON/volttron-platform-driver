@@ -357,9 +357,9 @@ class PlatformDriverAgent(Agent):
     def _start_all_publishes(self):
         # TODO: Can we just schedule and let the stale property work its magic?
         for device in self.equipment_tree.devices(self.equipment_tree.root):
-            if (device.all_publish_interval
-                    and self.equipment_tree.is_published_all_depth(device.identifier)
-                    or self.equipment_tree.is_published_all_breadth(device.identifier)):
+            if (device.all_publish_interval and
+                    (self.equipment_tree.is_published_all_depth(device.identifier) or
+                     self.equipment_tree.is_published_all_breadth(device.identifier))):
                 # Schedule first publish at end of first polling cycle to guarantee all points should have data.
                 start_all_datatime = max(poller.start_all_datetime
                                          for poller in self.poll_schedulers.values())
@@ -577,7 +577,7 @@ class PlatformDriverAgent(Agent):
         updates_required = []
         for p in points:
             if p.active:
-                return
+                continue
             else:
                 p.active = True
                 updates_required.append(p)
@@ -600,7 +600,7 @@ class PlatformDriverAgent(Agent):
     def _stop(self, points: Iterable[PointNode]) -> None:
         for p in points:
             if not p.active:
-                return
+                continue
             else:
                 p.active = False
                 group = self.equipment_tree.get_group(p.identifier)
@@ -1478,7 +1478,7 @@ class PlatformDriverAgent(Agent):
             headers['requesterID'] = requester
         if task_id is not None:
             headers['taskID'] = task_id
-        if type is not None:
+        if action_type is not None:
             headers['type'] = action_type
         return headers
 
