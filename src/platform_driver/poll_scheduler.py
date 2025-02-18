@@ -70,6 +70,7 @@ class PollSet:
     def _add_to_publish_setup(self, point: PointNode):
         point_depth, point_breadth = self.data_model.get_point_topics(point.identifier)
         device_depth, device_breadth = self.data_model.get_device_topics(point.identifier)
+
         if self.data_model.is_published_single_depth(point.identifier):
             self.single_depth.add(point_depth)
 
@@ -85,7 +86,7 @@ class PollSet:
     def  _remove_from_publish_setup(self, point: PointNode):
         point_depth, point_breadth = self.data_model.get_point_topics(point.identifier)
         device_depth, device_breadth = self.data_model.get_device_topics(point.identifier)
-        self.single_depth.discard(point.identifier)
+        self.single_depth.discard(point_depth)
         self.single_breadth.discard((point_depth, point_breadth))
         self.multi_depth[device_depth].discard(point_depth)
         if not self.multi_depth[device_depth]:
@@ -112,6 +113,9 @@ class PollSet:
             multi_breadth={k: self.multi_breadth.get(k, set()) | other.multi_breadth.get(k, set())
                     for k in self.multi_breadth.keys() | other.multi_breadth.keys()}
         )
+
+    def __bool__(self):
+        return bool(self.points)
 
 
 class PollScheduler:
@@ -190,7 +194,7 @@ class PollScheduler:
 
     @classmethod
     def add_to_schedule(cls, point: PointNode, data_model: EquipmentTree):
-        """Add a poll to the schedule, without complete rescheduling if possible."""
+        """Add a poll to the schedule, without complete rescheduling if possible"""
         group = data_model.get_group(point.identifier)
         remote = data_model.get_remote(point.identifier)
         interval = data_model.get_polling_interval(point.identifier)
@@ -214,7 +218,7 @@ class PollScheduler:
 
     @classmethod
     def _prune_poll_sets(cls, group, interval, remote):
-        if not cls.poll_sets[group][remote][interval]:
+        if not cls.poll_sets[group][remote][interval].points:
             cls.poll_sets[group][remote].pop(interval)
             if not cls.poll_sets[group][remote]:
                 cls.poll_sets[group].pop(remote)
