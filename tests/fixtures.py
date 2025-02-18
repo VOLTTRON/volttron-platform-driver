@@ -2,20 +2,13 @@ import argparse
 import json
 import pathlib
 import pytest
+import os
 
 from volttron.driver.base.interfaces import BaseInterface
-#from volttron.services.driver.data_structures import RemoteTree
 from volttron.driver.base.driver import DriverAgent  # TODO: This should import real DriverAgent from base driver and/or a better mock?
 from platform_driver.agent import PlatformDriverAgent
 from volttron.types.server_config import ServerConfig
-
-
-@pytest.fixture
-def remote_tree():
-    config_file = pathlib.Path(__file__).parent.parent.absolute() / 'sample_configs/remote_grouping.json'
-    with open(config_file) as f:
-        config = json.load(f)
-        return RemoteTree(config)
+from unittest.mock import MagicMock, Mock, patch
 
 @pytest.fixture
 def driver_agent():
@@ -69,3 +62,38 @@ class DummyInterface(BaseInterface):
     @classmethod
     def unique_remote_id(cls, equipment_name, config, **kwargs):
         return 'some', 'unique', 'id'
+
+@pytest.fixture(autouse=True)
+def set_agent_identity():
+    os.environ["AGENT_VIP_IDENTITY"] = "test_identity"
+
+
+@pytest.fixture
+def base_PDA():
+    # Set the required environment variable for AGENT_VIP_IDENTITY
+    os.environ["AGENT_VIP_IDENTITY"] = "test_identity"
+
+    with patch('volttron.client.decorators.get_core_builder') as mock_get_core_builder, \
+            patch(
+                'volttron.types.auth.auth_credentials.CredentialsFactory.load_credentials_from_file') as mock_load_credentials:
+        # Mock core with necessary attributes
+        mock_core = MagicMock()
+        mock_core._annotations = {"__rpc__.exports": set()}
+        mock_get_core_builder.return_value.build.return_value = mock_core
+
+        # Mock credentials to bypass file loading
+        mock_credentials = MagicMock()
+        mock_credentials.identity = "test_identity"
+        mock_credentials.publickey = "test_public_key"
+        mock_load_credentials.return_value = mock_credentials
+
+        # Initialize the agent and add frequently used mocks
+        PDA = PlatformDriverAgent()
+        PDA.core = mock_core
+        PDA.vip = MagicMock()
+        PDA.vip.pubsub.publish = MagicMock()
+        PDA._push_result_topic_pair = Mock()
+        PDA.equipment_tree = MagicMock()
+        PDA.equipment_tree.root = "root"
+
+        return PDA

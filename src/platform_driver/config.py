@@ -1,8 +1,30 @@
-import logging
-from datetime import timedelta
-from pydantic import BaseModel, computed_field, ConfigDict, Field, field_validator, model_validator
+# -*- coding: utf-8 -*- {{{
+# ===----------------------------------------------------------------------===
+#
+#                 Installable Component of Eclipse VOLTTRON
+#
+# ===----------------------------------------------------------------------===
+#
+# Copyright 2022 Battelle Memorial Institute
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not
+# use this file except in compliance with the License. You may obtain a copy
+# of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+# ===----------------------------------------------------------------------===
+# }}}
 
 import logging
+from datetime import timedelta
+from pydantic import BaseModel, computed_field, ConfigDict, Field, model_validator
 
 
 _log = logging.getLogger()
@@ -29,7 +51,6 @@ class PlatformDriverConfig(BaseModel):
     model_config = ConfigDict(validate_assignment=True, populate_by_name=True)
     allow_duplicate_remotes: bool = False
     allow_no_lock_write: bool = True  # Deprecated.
-    allow_reschedule: bool = True
     # TODO: Is there a better default for breadth_first_base besides "devices" or "points",
     #  since point names are still keys in the dict? Maybe just "breadth" or something?
     #  This will actually be organized (in all/multi) as device/building/campus: {point1: val1, point2: val2}

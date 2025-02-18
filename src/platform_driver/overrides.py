@@ -1,3 +1,27 @@
+# -*- coding: utf-8 -*- {{{
+# ===----------------------------------------------------------------------===
+#
+#                 Installable Component of Eclipse VOLTTRON
+#
+# ===----------------------------------------------------------------------===
+#
+# Copyright 2022 Battelle Memorial Institute
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not
+# use this file except in compliance with the License. You may obtain a copy
+# of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+# ===----------------------------------------------------------------------===
+# }}}
+
 import fnmatch
 import logging
 
@@ -20,11 +44,11 @@ class OverrideManager:
     def __init__(self, parent):
         self.devices = set()
         self.interval_events = {}
-        self.parent = parent
+        self.agent = parent
         self.patterns = set()
 
         try:
-            values = loads(self.parent.vip.config.get("_override_patterns"))
+            values = loads(self.agent.vip.config.get("_override_patterns"))
             if isinstance(values, dict):
                 for pattern, end_time in values.items():
                     now = get_aware_utc_now()
@@ -46,49 +70,69 @@ class OverrideManager:
                failsafe_revert=True,
                staggered_revert=False,
                from_config_store=False):
-        """Turn on override condition on all devices matching the pattern. It schedules an event to keep track of
-        the duration over which override has to be applied. New override patterns and corresponding end times are
-        stored in config store.
-        :param pattern: Override pattern to be applied. For example,
-        :type pattern: str
-        :param duration: Time duration for the override in seconds. If duration <= 0.0, it implies as indefinite
-        duration.
-        :type duration: float
-        :param failsafe_revert: Flag to indicate if revert is required
-        :type failsafe_revert: boolean
-        :param staggered_revert: Flag to indicate if staggering of reverts is needed.
-        :type staggered_revert: boolean
-        :param from_config_store: Flag to indicate if this function is called from config store callback
-        :type from_config_store: boolean
         """
-        stagger_interval = 0.05    # sec
-        # Add to override patterns set
+        Turn on override condition on all devices matching the pattern. It schedules
+        an event to keep track of the duration over which override has to be applied.
+
+        :param pattern: Override pattern (wildcard) to be applied, e.g. "devices/some_device/*".
+        :param duration: Time duration for the override in seconds. If <= 0.0, it's indefinite.
+        :param failsafe_revert: If True, revert points to their default state.
+        :param staggered_revert: If True, revert calls are staggered over time.
+        :param from_config_store: If True, indicates this method was called from a config store callback.
+        """
+        _log.debug(f"Setting override on pattern='{pattern}', duration={duration}, "
+                   f"failsafe_revert={failsafe_revert}, staggered_revert={staggered_revert}")
+
+        stagger_interval = 0.05  # seconds between staggered reverts
+
+        # Add this pattern to our set of known override patterns
         self.patterns.add(pattern)
+
         i = 0
-        for name in self.instances.keys():
+        # Loop over each device from the equipment tree
+        # 'devices()' might return strings or DeviceNodes
+        for device_obj in self.agent.equipment_tree.devices():
             i += 1
-            if fnmatch.fnmatch(name, pattern):
-                # If revert to default state is needed
+
+            # Convert DeviceNode -> string, if needed
+            if hasattr(device_obj, "identifier"):
+                device_name = device_obj.identifier  # e.g. "devices/singletestfake"
+            else:
+                device_name = device_obj  # it might already be a string
+
+            # Match the device_name against the override pattern
+            if fnmatch.fnmatch(device_name, pattern):
+                _log.debug(f"Override matched device='{device_name}' with pattern='{pattern}'")
+
+                # If failsafe_revert is requested, revert the device
                 if failsafe_revert:
                     if staggered_revert:
-                        self.parent.core.spawn_later(i * stagger_interval, self.instances[name].revert_all())
+                        # Stagger this revert call
+                        self.agent.core.spawn_later(
+                            i * stagger_interval, self.agent.revert, device_name
+                        )
                     else:
-                        self.parent.core.spawn(self.instances[name].revert_all())
-                # Set override
-                self.devices.add(name)
-        # Set timer for interval of override condition
+                        # Immediately revert
+                        self.agent.core.spawn(self.agent.revert, device_name)
+
+                # Mark this device as overridden
+                self.devices.add(device_name)
+
+        # Set a timer for the override duration (if > 0)
         config_update = self._update_override_interval(duration, pattern)
+
+        # If we changed the override intervals and it wasn't a config store callback,
+        # then update our stored override patterns in config store
         if config_update and not from_config_store:
-            # Update config store
-            patterns = dict()
+            patterns_dict = {}
             for pat in self.patterns:
-                if self.interval_events[pat] is None:
-                    patterns[pat] = str(0.0)
+                if self.interval_events.get(pat) is None:
+                    patterns_dict[pat] = "0.0"
                 else:
                     evt, end_time = self.interval_events[pat]
-                    patterns[pat] = format_timestamp(end_time)
+                    patterns_dict[pat] = format_timestamp(end_time)
 
-            self.parent.vip.config.set("_override_patterns", dumps(patterns))
+            self.agent.vip.config.set("_override_patterns", dumps(patterns_dict))
 
     def set_off(self, pattern):
         """Turn off override condition on all devices matching the pattern. It removes the pattern from the override
@@ -106,7 +150,7 @@ class OverrideManager:
             patterns = dict()
             # Build override devices list again
             for pat in self.patterns:
-                for device in self.instances:
+                for device in self.agent.equipment_tree.devices():
                     if fnmatch.fnmatch(device, pat):
                         self.devices.add(device)
 
@@ -116,7 +160,7 @@ class OverrideManager:
                     evt, end_time = self.interval_events[pat]
                     patterns[pat] = format_timestamp(end_time)
 
-            self.parent.vip.config.set("_override_patterns", dumps(patterns))
+            self.agent.vip.config.set("_override_patterns", dumps(patterns))
         else:
             _log.error("Override Pattern did not match!")
             raise OverrideError(
@@ -134,7 +178,7 @@ class OverrideManager:
         self.interval_events.clear()
         self.devices.clear()
         self.patterns.clear()
-        self.parent.vip.config.set("_override_patterns", {})
+        self.agent.vip.config.set("_override_patterns", {})
 
     def _update_override_interval(self, interval, pattern):
         """Schedules a new override event for the specified interval and pattern. If the pattern already exists and new
@@ -169,7 +213,7 @@ class OverrideManager:
                     evt = self.interval_events.pop(pattern)
                     evt[0].cancel()
             # Schedule new override event
-            event = self.parent.core.schedule(override_end, self.set_off, pattern)
+            event = self.agent.core.schedule(override_end, self.set_off, pattern)
             self.interval_events[pattern] = (event, override_end)
             return True
 

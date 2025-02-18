@@ -1,3 +1,27 @@
+# -*- coding: utf-8 -*- {{{
+# ===----------------------------------------------------------------------===
+#
+#                 Installable Component of Eclipse VOLTTRON
+#
+# ===----------------------------------------------------------------------===
+#
+# Copyright 2022 Battelle Memorial Institute
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not
+# use this file except in compliance with the License. You may obtain a copy
+# of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+# ===----------------------------------------------------------------------===
+# }}}
+
 import gevent
 import logging
 
@@ -11,9 +35,9 @@ from volttron.driver.base.driver import DriverAgent
 from volttron.driver.base.config import DataSource, DeviceConfig, EquipmentConfig, PointConfig
 from volttron.utils import get_aware_utc_now, parse_json_config
 
-from .overrides import OverrideError
-from .reservations import ReservationLockError
-from .topic_tree import TopicNode, TopicTree
+from platform_driver.overrides import OverrideError
+from platform_driver.reservations import ReservationLockError
+from platform_driver.topic_tree import TopicNode, TopicTree
 
 
 _log = logging.getLogger(__name__)
@@ -24,9 +48,6 @@ class EquipmentNode(TopicNode):
         super(EquipmentNode, self).__init__(*args, **kwargs)
         self.data['config'] = config if config is not None else EquipmentConfig()
         self.data['remote'] = None
-        # TODO: should ephemeral values like overridden and reserved_by be properties stored in data?
-        self.data['overridden']: bool = False
-        self.data['reserved_by'] = None
         self.data['segment_type'] = 'TOPIC_SEGMENT'
 
     @property
@@ -78,14 +99,6 @@ class EquipmentNode(TopicNode):
     @property
     def is_concrete(self) -> bool:
         return False if self.segment_type == 'TOPIC_SEGMENT' else True
-
-    @property
-    def overridden(self) -> bool:
-        return self.data['overridden']
-
-    @overridden.setter
-    def overridden(self, value: bool):
-        self.data['overridden'] = value
         
     @property
     def publish_single_depth(self) -> bool:
@@ -119,14 +132,6 @@ class EquipmentNode(TopicNode):
     def reservation_required_for_write(self, value: bool):
         self.data['config'].reservation_required_for_write = value
 
-    @property
-    def reserved(self) -> str:
-        return self.data['reserved_by']
-
-    @reserved.setter
-    def reserved(self, holder: str):
-        self.data['reserved_by'] = holder
-
     def wipe_configuration(self):
         # Wipe all data and reset segment_type to TOPIC_SEGMENT.
         self.data = {'segment_type': 'TOPIC_SEGMENT'}
@@ -136,7 +141,7 @@ class DeviceNode(EquipmentNode):
     def __init__(self, config, driver, *args, **kwargs):
         config = config.copy()
         super(DeviceNode, self).__init__(config, *args, **kwargs)
-        self.data['remote']: DriverAgent = driver
+        self._remote: DriverAgent = driver
         self.data['registry_name'] = None
         self.data['segment_type'] = 'DEVICE'
         self.config_finished = False
@@ -147,7 +152,7 @@ class DeviceNode(EquipmentNode):
 
     @property
     def remote(self) -> DriverAgent:
-        return self.data['remote']
+        return self._remote
 
     @property
     def registry_name(self) -> str:
@@ -155,11 +160,7 @@ class DeviceNode(EquipmentNode):
 
     def stop_device(self):
         _log.info(f"Stopping driver: {self.identifier}")
-        try:
-            self.remote.core.stop(timeout=5.0)
-        except Exception as e:
-            _log.error(f"Failure during {self.identifier} driver shutdown: {e}")
-
+        # TODO: This previously stopped the DriverAgent. Do we need to check if any polling instances need stopped?
 
 class PointNode(EquipmentNode):
     def __init__(self, config, *args, **kwargs):
@@ -227,7 +228,7 @@ class EquipmentTree(TopicTree):
         root_config.publish_all_depth = agent.config.publish_all_depth
         root_config.publish_all_breadth = agent.config.publish_all_breadth
 
-    def _set_registry_name(self, nid):
+    def set_registry_name(self, nid):
         # TODO: This method should be unnecessary, if we can just get the registry_name in the config_store push.
         #  The registry name itself was not available at configuration time
         #   and is not returned by the self.config.get() method ( it is dereferenced, already).
@@ -240,6 +241,8 @@ class EquipmentTree(TopicTree):
             _log.warning(f'Unable to get registry_name for device: {nid} -- {e}')
         finally:
             reg_name = remote_conf.get('registry_config', '')
+            # TODO: This should probably actually be checking if it is a string that startswith("config://").
+            #  What if the registry is a json dictionary in the device config?
             return reg_name[len('config://'):] if len(reg_name) >= len('config://') else None
 
     def add_device(self, device_topic: str, dev_config: DeviceConfig, driver_agent: DriverAgent,
@@ -257,7 +260,7 @@ class EquipmentTree(TopicTree):
         # Set up the device node itself.
         try:
             device_node = DeviceNode(config=dev_config, driver=driver_agent, tag=device_name, identifier=device_topic)
-            device_node.data['registry_name'] = self._set_registry_name(device_node.identifier)
+            device_node.data['registry_name'] = self.set_registry_name(device_node.identifier)
             self.add_node(device_node, parent=parent)
         except DuplicatedNodeIdError:
             # TODO: If the node already exists, update it as necessary?
@@ -301,7 +304,7 @@ class EquipmentTree(TopicTree):
                 new_register = remote.interface.create_register(point_config)
                 remote.interface.insert_register(new_register, nid)
                 changes = True
-            existing_points.remove(point_id)
+                existing_points.remove(point_id)
         for removed in existing_points:
             self.remove_segment(removed)
             changes = True
@@ -341,7 +344,7 @@ class EquipmentTree(TopicTree):
         node = self.get_node(nid)
         if node.is_device:
             node.stop_device()
-        elif node.is_point():
+        elif node.is_point:
             self.get_remote(nid).interface.point_map.pop(nid)
         if leave_disconnected and self.has_concrete_successors(nid):
             # TODO: This may leave behind points which have no Device. Replace Fake Driver Interface with static points?
@@ -370,20 +373,17 @@ class EquipmentTree(TopicTree):
 
     def find_points(self, topic_pattern: str = '', regex: str = None, exact_matches: Iterable = None
                     ) -> Iterable[PointNode]:
-        return (p for p in self.find_leaves(topic_pattern, regex, exact_matches) if p.is_point)
+        return (p for p in self.resolve_query(topic_pattern, regex, exact_matches, return_leaves=True) if p.is_point)
 
     def raise_on_locks(self, node: EquipmentNode, requester: str):
-        try:
-            reserved = next(self.rsearch(node.identifier, lambda n: n.reserved))
-        except StopIteration:
-            reserved = None
-        if reserved and not node.identifier == reserved:
+        reserved_by = self.agent.reservation_manager.reserved_by(node.identifier)
+        if reserved_by and reserved_by != requester:
             raise ReservationLockError(f"Equipment {node.identifier} is reserved by another party."
                                        f" ({requester}) does not have permission to write at this time.")
-        elif not reserved and any(self.rsearch(node.identifier, lambda n: n.reservation_required_for_write)):
+        elif not reserved_by and any(self.rsearch(node.identifier, lambda n: n.reservation_required_for_write)):
             raise ReservationLockError(f'Caller ({requester}) does not have a reservation '
                                        f'for equipment {node.identifier}. A reservation is required to write.')
-        elif any(self.rsearch(node.identifier, lambda n: n.overridden)):
+        elif self.get_device_node(node.identifier).identifier in self.agent.override_manager.devices:
             raise OverrideError(f"Cannot set point on {node.identifier} since global override is set")
         
     def get_device_node(self, nid: str) -> DeviceNode:
@@ -432,6 +432,8 @@ class EquipmentTree(TopicTree):
         return any(p.stale for p in self.points(nid))
 
     def update_stored_registry_config(self, nid: str):
+        # TODO: This updates the registry using JSON no matter what its original saved format was. This should be fine,
+        #  and JSON should probably be preferred anyway, but it does not update the name, which is probably foo.csv....
         device_node = self.get_device_node(nid)
         registry = [p.config.model_dump() for p in self.points(device_node.identifier)]
         if device_node.registry_name:

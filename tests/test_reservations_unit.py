@@ -5,8 +5,9 @@ from platform_driver.agent import PlatformDriverAgent
 from platform_driver.reservations import ReservationManager, Task, TimeSlice, Reservation
 from pickle import dumps
 from base64 import b64encode
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from volttron.utils import get_aware_utc_now
+from unittest.mock import patch
 
 
 class TestTimeSliceStretchToInclude:
@@ -635,7 +636,10 @@ class TestReservationManagerUpdate:
     def reservation_manager(self):
         parent = Mock()
         parent.vip = Mock()
-        parent.vip.config.get = MagicMock(return_value=pickle.dumps({}))
+        parent.vip.pubsub.publish = MagicMock()
+        parent.core = Mock()
+        parent.core.schedule = MagicMock()
+        parent.vip.config.get = MagicMock(return_value=b'')
         parent.vip.config.set = MagicMock()
         parent.config = Mock()
         parent.config.reservation_publish_interval = 60
@@ -644,27 +648,107 @@ class TestReservationManagerUpdate:
         rm = ReservationManager(parent, grace_time)
         rm._cleanup = MagicMock()
         rm.save_state = MagicMock()
+        rm.get_reservation_state = MagicMock()
+        rm.get_next_event_time = MagicMock()
+        rm._get_adjusted_next_event_time = MagicMock()
+        rm._device_states = {}
+        rm._update_event_time = None
+        rm._update_event = None
+
         return rm
 
     def test_update_adjusts_time_correctly(self, reservation_manager):
-        """Tests that the update method adjusts the event timing correctly and schedules the next event properly """
+        """Test that 'update' adjusts the event time correctly and schedules the next event properly."""
         mock_now = get_aware_utc_now()
         future_time = mock_now + timedelta(minutes=5)
 
-        reservation_manager.get_next_event_time = MagicMock(return_value=future_time)
-        reservation_manager.get_reservation_state = MagicMock(return_value={})
-        reservation_manager._get_adjusted_next_event_time = MagicMock(return_value=future_time)
+        reservation_manager.get_reservation_state.return_value = {}
+        reservation_manager.get_next_event_time.return_value = future_time
+        reservation_manager._get_adjusted_next_event_time.return_value = future_time
 
         reservation_manager.update(now=mock_now)
 
-        # assert the internal method calls
-        reservation_manager.get_reservation_state.assert_called_once_with(
-            mock_now), "get_reservation_state should be called once"
-        reservation_manager.get_next_event_time.assert_called_once_with(
-            mock_now), "get_next_event_time should be called once"
+        reservation_manager.get_reservation_state.assert_called_once_with(mock_now)
+        reservation_manager.get_next_event_time.assert_called_once_with(mock_now)
         reservation_manager._get_adjusted_next_event_time.assert_called_once_with(
-            mock_now, future_time, None), "get_adjusted_next_event_time should be called once"
-        assert reservation_manager._update_event_time == future_time, "Updated event time should be the future time"
+            mock_now, future_time, None)
+        assert reservation_manager._update_event_time == future_time, "Event time should be updated to future_time"
+        reservation_manager.agent.core.schedule.assert_called_once_with(
+            future_time, reservation_manager.update, future_time)
+
+    def test_update_with_stale_time(self, reservation_manager):
+        """Test that 'update' adjusts for stale time when the system resumes from suspension."""
+        # Replace 'platform_driver.reservations' with the actual module where 'get_aware_utc_now' is used
+        with patch('platform_driver.reservations.get_aware_utc_now') as mock_get_now:
+            # Use a fixed datetime to avoid microsecond differences
+            test_now = get_aware_utc_now()
+            test_now = test_now.replace(microsecond=0)
+            stale_now = test_now - timedelta(minutes=5)    # Simulate system time lag
+            future_time = test_now + timedelta(minutes=5)
+
+            mock_get_now.return_value = test_now
+
+            reservation_manager.get_reservation_state.return_value = {}
+            reservation_manager.get_next_event_time.return_value = future_time
+            reservation_manager._get_adjusted_next_event_time.return_value = future_time
+
+            reservation_manager.update(now=stale_now)
+
+            reservation_manager.get_reservation_state.assert_called_once_with(test_now)
+            reservation_manager.get_next_event_time.assert_called_once_with(test_now)
+            reservation_manager._get_adjusted_next_event_time.assert_called_once_with(
+                test_now, future_time, None)
+            reservation_manager.agent.core.schedule.assert_called_once_with(
+                future_time, reservation_manager.update, future_time)
+
+    def test_update_with_device_only(self, reservation_manager):
+        """Test that 'update' publishes only for the specified device when 'device_only' is provided."""
+        mock_now = get_aware_utc_now()
+        future_time = mock_now + timedelta(minutes=5)
+        device_state = Mock(agent_id='agent1', task_id='task1', time_remaining=60)
+        reservation_manager.get_reservation_state.return_value = {'device1': device_state}
+        reservation_manager.get_next_event_time.return_value = future_time
+        reservation_manager._get_adjusted_next_event_time.return_value = future_time
+
+        # Mock ACTUATOR_RESERVATION_ANNOUNCE_RAW
+        with patch('platform_driver.reservations.ACTUATOR_RESERVATION_ANNOUNCE_RAW',
+                   '/actuator/reservation/announce/{device}'):
+            reservation_manager.update(now=mock_now, device_only='device1')
+
+        reservation_manager.agent.vip.pubsub.publish.assert_called_once()
+        args, kwargs = reservation_manager.agent.vip.pubsub.publish.call_args
+        assert 'device1' in args[1], "The topic should include 'device1'"
+
+    def test_update_no_publish(self, reservation_manager):
+        """Test that 'update' does not publish when 'publish' is set to False."""
+        mock_now = get_aware_utc_now()
+        future_time = mock_now + timedelta(minutes=5)
+
+        reservation_manager.get_reservation_state.return_value = {}
+        reservation_manager.get_next_event_time.return_value = future_time
+        reservation_manager._get_adjusted_next_event_time.return_value = future_time
+
+        reservation_manager.update(now=mock_now, publish=False)
+
+        reservation_manager.agent.vip.pubsub.publish.assert_not_called()
+        reservation_manager.agent.core.schedule.assert_called_once_with(
+            future_time, reservation_manager.update, future_time)
+
+    def test_update_with_empty_device_states(self, reservation_manager):
+        """Test that 'update' handles empty device states correctly."""
+        mock_now = get_aware_utc_now()
+        future_time = mock_now + timedelta(minutes=5)
+
+        reservation_manager._device_states = {}
+        reservation_manager.get_reservation_state.return_value = {}
+        reservation_manager.get_next_event_time.return_value = future_time
+        reservation_manager._get_adjusted_next_event_time.return_value = future_time
+
+        reservation_manager.update(now=mock_now)
+
+        reservation_manager.agent.vip.pubsub.publish.assert_not_called()
+        reservation_manager.agent.core.schedule.assert_called_once_with(
+            future_time, reservation_manager.update, future_time)
 
 
 class TestReservationManagerGetAdjustedNextEventTime:
@@ -767,7 +851,7 @@ class TestReservationManagerSaveState:
         reservation_manager.save_state(self.now)
 
         # Tests if our mocked object was called once, and with the correct args
-        reservation_manager.parent.vip.config.set.assert_called_once_with(
+        reservation_manager.agent.vip.config.set.assert_called_once_with(
             reservation_manager.reservation_state_file, expected_data,
             send_update=False), "save state should call parent.vip.config.set with correct data"
 
@@ -1023,32 +1107,189 @@ class TestReservationManagerGetReservationState:
         grace_time = 10
         rm = ReservationManager(parent, grace_time)
 
-        task = Mock()
-        task.agent_id = "agent1"
-        task.get_current_slots = MagicMock(
-            return_value={"device1": Mock(end=get_aware_utc_now() + timedelta(minutes=5))})
-
-        # add tasks to running and preempted sets
-        rm.tasks = {"task1": task}
-        rm.running_tasks = {"task1"}
-        rm.preempted_tasks = set()
-
         rm._cleanup = MagicMock()
         return rm
 
-    def test_get_reservation_state(self, reservation_manager):
-        """Tests that get reservation state returns the correct reservation state"""
+    def test_get_reservation_state_multiple_running_tasks(self, reservation_manager):
+        """Test get_reservation_state with multiple running tasks."""
         now = get_aware_utc_now()
+        task1 = Mock()
+        task1.agent_id = "agent1"
+        task1.get_current_slots = MagicMock(
+            return_value={"device1": Mock(end=now + timedelta(minutes=5))})
+        task2 = Mock()
+        task2.agent_id = "agent2"
+        task2.get_current_slots = MagicMock(
+            return_value={"device2": Mock(end=now + timedelta(minutes=10))})
+
+        reservation_manager.tasks = {"task1": task1, "task2": task2}
+        reservation_manager.running_tasks = {"task1", "task2"}
+        reservation_manager.preempted_tasks = set()
+
         result = reservation_manager.get_reservation_state(now)
 
-        reservation_manager._cleanup.assert_called_once_with(
-            now), "_cleanup should be called with (now)"
+        reservation_manager._cleanup.assert_called_once_with(now)
+        assert "device1" in result, "Device1 should be in reservation state"
+        assert "device2" in result, "Device2 should be in reservation state"
+
+        device_state1 = result["device1"]
+        device_state2 = result["device2"]
+
+        assert device_state1.agent_id == "agent1", "agent1 should be in agent_id for device1"
+        assert device_state1.task_id == "task1", "task1 should be in task_id for device1"
+        assert device_state1.time_remaining > 299, "Time remaining on device1 should be more than 299 seconds"
+
+        assert device_state2.agent_id == "agent2", "agent2 should be in agent_id for device2"
+        assert device_state2.task_id == "task2", "task2 should be in task_id for device2"
+        assert device_state2.time_remaining > 599, "Time remaining on device2 should be more than 599 seconds"
+
+    def test_get_reservation_state_with_preempted_tasks(self, reservation_manager):
+        """Test get_reservation_state with preempted tasks."""
+        now = get_aware_utc_now()
+        task1 = Mock()
+        task1.agent_id = "agent1"
+        task1.get_current_slots = MagicMock(
+            return_value={"device1": Mock(end=now + timedelta(minutes=5))})
+        task2 = Mock()
+        task2.agent_id = "agent2"
+        task2.get_current_slots = MagicMock(
+            return_value={"device2": Mock(end=now + timedelta(minutes=10))})
+
+        reservation_manager.tasks = {"task1": task1, "task2": task2}
+        reservation_manager.running_tasks = {"task1"}
+        reservation_manager.preempted_tasks = {"task2"}
+
+        result = reservation_manager.get_reservation_state(now)
+
+        reservation_manager._cleanup.assert_called_once_with(now)
+        assert "device1" in result, "Device1 should be in reservation state"
+        assert "device2" in result, "Device2 should be in reservation state"
+
+        device_state1 = result["device1"]
+        device_state2 = result["device2"]
+
+        assert device_state1.agent_id == "agent1", "agent1 should be in agent_id for device1"
+        assert device_state1.task_id == "task1", "task1 should be in task_id for device1"
+        assert device_state1.time_remaining > 299, "Time remaining on device1 should be more than 299 seconds"
+
+        assert device_state2.agent_id == "agent2", "agent2 should be in agent_id for device2"
+        assert device_state2.task_id == "task2", "task2 should be in task_id for device2"
+        assert device_state2.time_remaining > 599, "Time remaining on device2 should be more than 599 seconds"
+
+    def test_get_reservation_state_device_in_both_running_and_preempted(self, reservation_manager):
+        """Test get_reservation_state when the same device is in both running and preempted tasks."""
+        now = get_aware_utc_now()
+        task1 = Mock()
+        task1.agent_id = "agent1"
+        task1.get_current_slots = MagicMock(
+            return_value={"device1": Mock(end=now + timedelta(minutes=5))})
+        task2 = Mock()
+        task2.agent_id = "agent2"
+        task2.get_current_slots = MagicMock(
+            return_value={"device1": Mock(end=now + timedelta(minutes=10))})
+
+        reservation_manager.tasks = {"task1": task1, "task2": task2}
+        reservation_manager.running_tasks = {"task1"}
+        reservation_manager.preempted_tasks = {"task2"}
+
+        result = reservation_manager.get_reservation_state(now)
+
+        reservation_manager._cleanup.assert_called_once_with(now)
+        assert "device1" in result, "Device1 should be in reservation state"
+
         device_state = result["device1"]
 
-        assert "device1" in result, "Device1 should be in reservation state"
-        assert device_state.agent_id == "agent1", "agent1 should be in agent_id"
-        assert device_state.task_id == "task1", "task1 should be in task_id"
-        assert device_state.time_remaining > 299, "There should be time remaining on the running task"
+        # Since preempted_results overwrite running_results, the device_state should come from preempted task
+        assert device_state.agent_id == "agent2", "agent_id should be agent2 from preempted task"
+        assert device_state.task_id == "task2", "task2 should be task_id from preempted task"
+        assert device_state.time_remaining > 599, "Time remaining should be from preempted task"
+
+    def test_get_reservation_state_with_expired_task(self, reservation_manager):
+        """Test get_reservation_state with a task that has already expired."""
+        now = get_aware_utc_now()
+        task1 = Mock()
+        task1.agent_id = "agent1"
+        task1.get_current_slots = MagicMock(
+            return_value={"device1": Mock(end=now - timedelta(minutes=1))})    # Ended 1 minute ago
+
+        reservation_manager.tasks = {"task1": task1}
+        reservation_manager.running_tasks = {"task1"}
+        reservation_manager.preempted_tasks = set()
+
+        # Simulate _cleanup removing expired tasks
+        reservation_manager._cleanup.side_effect = lambda n: reservation_manager.running_tasks.discard(
+            "task1")
+
+        result = reservation_manager.get_reservation_state(now)
+
+        reservation_manager._cleanup.assert_called_once_with(now)
+        assert "device1" not in result, "Device1 should not be in reservation state as the task has expired"
+
+    def test_get_reservation_state_with_no_tasks(self, reservation_manager):
+        """Test get_reservation_state when there are no tasks."""
+        now = get_aware_utc_now()
+        reservation_manager.tasks = {}
+        reservation_manager.running_tasks = set()
+        reservation_manager.preempted_tasks = set()
+
+        result = reservation_manager.get_reservation_state(now)
+
+        reservation_manager._cleanup.assert_called_once_with(now)
+        assert result == {}, "Reservation state should be empty when there are no tasks"
+
+    def test_get_reservation_state_device_in_multiple_running_tasks(self, reservation_manager):
+        """Test get_reservation_state when the same device is in multiple running tasks."""
+        now = get_aware_utc_now()
+        task1 = Mock()
+        task1.agent_id = "agent1"
+        task1.get_current_slots = MagicMock(
+            return_value={"device1": Mock(end=now + timedelta(minutes=5))})
+        task2 = Mock()
+        task2.agent_id = "agent2"
+        task2.get_current_slots = MagicMock(
+            return_value={"device1": Mock(end=now + timedelta(minutes=10))})
+
+        reservation_manager.tasks = {"task1": task1, "task2": task2}
+        reservation_manager.running_tasks = {"task1", "task2"}
+        reservation_manager.preempted_tasks = set()
+
+        with pytest.raises(AssertionError):
+            reservation_manager.get_reservation_state(now)
+
+    def test_get_reservation_state_device_in_multiple_preempted_tasks(self, reservation_manager):
+        """Test get_reservation_state when the same device is in multiple preempted tasks."""
+        now = get_aware_utc_now()
+        task1 = Mock()
+        task1.agent_id = "agent1"
+        task1.get_current_slots = MagicMock(
+            return_value={"device1": Mock(end=now + timedelta(minutes=5))})
+        task2 = Mock()
+        task2.agent_id = "agent2"
+        task2.get_current_slots = MagicMock(
+            return_value={"device1": Mock(end=now + timedelta(minutes=10))})
+
+        reservation_manager.tasks = {"task1": task1, "task2": task2}
+        reservation_manager.running_tasks = set()
+        reservation_manager.preempted_tasks = {"task1", "task2"}
+
+        with pytest.raises(AssertionError):
+            reservation_manager.get_reservation_state(now)
+
+    def test_get_reservation_state_task_with_no_slots(self, reservation_manager):
+        """Test get_reservation_state when a task has no current slots."""
+        now = get_aware_utc_now()
+        task1 = Mock()
+        task1.agent_id = "agent1"
+        task1.get_current_slots = MagicMock(return_value={})    # No current slots
+
+        reservation_manager.tasks = {"task1": task1}
+        reservation_manager.running_tasks = {"task1"}
+        reservation_manager.preempted_tasks = set()
+
+        result = reservation_manager.get_reservation_state(now)
+
+        reservation_manager._cleanup.assert_called_once_with(now)
+        assert result == {}, "Reservation state should be empty when tasks have no current slots"
 
 
 class TestReservationGetNextEventTime:
